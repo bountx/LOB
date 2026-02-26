@@ -1,0 +1,20 @@
+# Build directories
+build/
+out/
+bin/
+
+# vcpkg artifacts
+vcpkg_installed/
+.vcpkg-root
+
+# IDE folders
+.vscode/
+.idea/
+
+# Compiled object files and binaries
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+lob_app
