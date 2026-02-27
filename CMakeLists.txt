@@ -17,6 +17,7 @@ add_executable(lob_app src/main.cpp)
 
 # Link the ixwebsocket and nlohmann_json libraries to your executable
 target_link_libraries(lob_app PRIVATE
+    Threads::Threads
     ixwebsocket::ixwebsocket
     nlohmann_json::nlohmann_json
 )
