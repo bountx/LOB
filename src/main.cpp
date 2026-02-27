@@ -184,8 +184,10 @@ int main() {
                 auto json = nlohmann::json::parse(msg->str);
                 std::lock_guard<std::mutex> lock(bufferMutex);
                 bufferedMessages.push_back(json);
-            } catch (const nlohmann::json::parse_error& e) {
-                std::cerr << "JSON parse error: " << e.what() << std::endl;
+            } catch (const nlohmann::json::exception& e) {
+                std::cerr << "JSON error: " << e.what() << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "Update processing error: " << e.what() << std::endl;
             }
         } else {
             // If snapshot is already applied, process messages in real-time
@@ -208,8 +210,10 @@ int main() {
                 if (processingUs > metrics.maxProcessingUs.load()) {
                     metrics.maxProcessingUs.store(processingUs);
                 }
-            } catch (const nlohmann::json::parse_error& e) {
-                std::cerr << "JSON parse error: " << e.what() << std::endl;
+            } catch (const nlohmann::json::exception& e) {
+                std::cerr << "Snapshot JSON error: " << e.what() << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "Snapshot apply error: " << e.what() << std::endl;
             }
         }
     });
