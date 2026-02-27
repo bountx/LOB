@@ -203,43 +203,39 @@ int main() {
             return; // ignore non-message events
         }
 
-        if (!orderBook.isSnapshotApplied()) {
-            // Buffer messages until snapshot is applied
-            try {
-                auto json = nlohmann::json::parse(msg->str);
+        try {
+            auto json = nlohmann::json::parse(msg->str);
+            bool buffered = false;
+            {
                 std::lock_guard<std::mutex> lock(bufferMutex);
-                bufferedMessages.push_back(json);
-            } catch (const nlohmann::json::exception& e) {
-                std::cerr << "JSON error: " << e.what() << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "Update processing error: " << e.what() << std::endl;
-            }
-        } else {
-            // If snapshot is already applied, process messages in real-time
-            try {
-                auto json = nlohmann::json::parse(msg->str);
-
-                // event lag metric
-                auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                long long eventLagMs = nowMs - json["E"].get<long long>();
-
-                // processing time metric
-                auto t0 = std::chrono::high_resolution_clock::now();
-                orderBook.applyUpdate(json);
-                auto t1 = std::chrono::high_resolution_clock::now();
-                long long processingUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-                metrics.msgCount++;
-                metrics.lastEventLagMs.store(eventLagMs);
-                metrics.lastProcessingUs.store(processingUs);
-                if (processingUs > metrics.maxProcessingUs.load()) {
-                    metrics.maxProcessingUs.store(processingUs);
+                if (!orderBook.isSnapshotApplied()) {
+                    bufferedMessages.push_back(json);
+                    buffered = true;
                 }
-            } catch (const nlohmann::json::exception& e) {
-                std::cerr << "Snapshot JSON error: " << e.what() << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "Snapshot apply error: " << e.what() << std::endl;
             }
+            if (buffered) return;
+
+            // event lag metric
+            auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            long long eventLagMs = nowMs - json["E"].get<long long>();
+
+            // processing time metric
+            auto t0 = std::chrono::high_resolution_clock::now();
+            orderBook.applyUpdate(json);
+            auto t1 = std::chrono::high_resolution_clock::now();
+            long long processingUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+            metrics.msgCount++;
+            metrics.lastEventLagMs.store(eventLagMs);
+            metrics.lastProcessingUs.store(processingUs);
+            if (processingUs > metrics.maxProcessingUs.load()) {
+                metrics.maxProcessingUs.store(processingUs);
+            }
+
+        } catch (const nlohmann::json::exception& e) {
+            std::cerr << "Snapshot JSON error: " << e.what() << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "Snapshot apply error: " << e.what() << std::endl;
         }
     });
     webSocket.start();
