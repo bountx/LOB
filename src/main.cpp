@@ -74,19 +74,19 @@ public:
         printf("Snapshot applied successfully.\n");
     }
 
-    void applyUpdate(const nlohmann::json& update) {
+    bool applyUpdate(const nlohmann::json& update) {
         std::lock_guard<std::mutex> lock(orderBookMutex);
         long long U = update["U"].get<long long>(); // first update ID in the stream
         long long u = update["u"].get<long long>(); // last update ID in the stream
         if (u <= lastUpdateId) {
             // Stale update, ignore
             printf("Stale update received, ignoring.\n");
-            return;
+            return true;
         }
         if (U > lastUpdateId + 1) {
             // Missed updates, restart from scratch
             printf("Missed updates, restarting from scratch.\n");
-            exit(1);
+            return false;
         }
         for (const auto& ask : update["a"]) {
             long long price = parseDecimal(ask[0].get<std::string>());
@@ -107,11 +107,13 @@ public:
             }
         }
         lastUpdateId = u;
+        return true;
     }
 
     void clear() {
         std::lock_guard<std::mutex> lock(orderBookMutex);
         lastUpdateId = 0;
+        snapshotApplied.store(false);
         asks.clear();
         bids.clear();
     }
@@ -179,102 +181,173 @@ struct Metrics {
   - If U > your current book's lastUpdateId + 1 → you missed events, restart from scratch
   - Otherwise → apply the update, set your lastUpdateId = u
 */
+class LOBApp {
+private:
+    std::mutex bufferMutex;
+    std::vector<nlohmann::json> bufferedMessages;
+    std::mutex wsReadyMutex;
+    std::condition_variable wsReady;
+    bool wsConnected = false;
+
+    // Fetch snapshot via REST, apply it, then replay buffered messages.
+    // Returns true on success, false on failure.
+    bool fetchAndApplySnapshot(OrderBook& orderBook) {
+        ix::HttpClient httpClient;
+        auto response = httpClient.get(
+            "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=5000",
+            std::make_shared<ix::HttpRequestArgs>());
+
+        if (response->statusCode != 200) {
+            fprintf(stderr, "Failed to fetch snapshot: HTTP %d\n", response->statusCode);
+            return false;
+        }
+
+        try {
+            auto snapshot = nlohmann::json::parse(response->body);
+            orderBook.applySnapshot(snapshot);
+
+            // Apply buffered messages that arrived while we were fetching
+            std::lock_guard<std::mutex> lock(bufferMutex);
+            for (const auto& msg : bufferedMessages) {
+                orderBook.applyUpdate(msg);
+            }
+            bufferedMessages.clear();
+            return true;
+        } catch (const std::exception& e) {
+            fprintf(stderr, "Snapshot parse/apply error: %s\n", e.what());
+            return false;
+        }
+    }
+
+public:
+    bool initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Metrics& metrics,
+                    int maxSnapshotRetries = 5) {
+        // Reset state for a fresh initialization
+        orderBook.clear();
+        {
+            std::lock_guard<std::mutex> lock(bufferMutex);
+            bufferedMessages.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(wsReadyMutex);
+            wsConnected = false;
+        }
+
+        webSocket.setOnMessageCallback(
+            [&orderBook, &metrics, this, &webSocket](const ix::WebSocketMessagePtr& msg) {
+            if (msg->type == ix::WebSocketMessageType::Open) {
+                printf("WebSocket connection opened.\n");
+                std::lock_guard<std::mutex> lock(wsReadyMutex);
+                wsConnected = true;
+                wsReady.notify_one();
+                return;
+            }
+            if (msg->type == ix::WebSocketMessageType::Close) {
+                printf("WebSocket connection closed.\n");
+                return;
+            }
+            if (msg->type == ix::WebSocketMessageType::Error) {
+                printf("WebSocket error: %s\n", msg->errorInfo.reason.c_str());
+                return;
+            }
+            if (msg->type != ix::WebSocketMessageType::Message) {
+                return;
+            }
+
+            try {
+                auto jsonMsg = nlohmann::json::parse(msg->str);
+
+                // Buffer until snapshot is applied
+                {
+                    std::lock_guard<std::mutex> lock(bufferMutex);
+                    if (!orderBook.isSnapshotApplied()) {
+                        printf("Buffering message until snapshot is applied. Message event time: %lld\n",
+                               jsonMsg["E"].get<long long>());
+                        bufferedMessages.push_back(std::move(jsonMsg));
+                        return;
+                    }
+                }
+
+                // Event lag metric
+                long long eventTime = jsonMsg["E"].get<long long>();
+                long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch())
+                                    .count();
+                metrics.lastEventLagMs.store(now - eventTime);
+
+                // Processing time metric
+                auto start = std::chrono::high_resolution_clock::now();
+                if (!orderBook.applyUpdate(jsonMsg)) {
+                    // Missed updates — trigger re-sync on a separate thread so we
+                    // don't block the WebSocket callback.
+                    printf("Restarting from scratch due to missed updates.\n");
+                    orderBook.clear();
+                    std::thread([this, &orderBook, &webSocket, &metrics]() {
+                        this->initialize(orderBook, webSocket, metrics);
+                    }).detach();
+                    return;
+                }
+                auto end = std::chrono::high_resolution_clock::now();
+                long long processingUs =
+                    std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+                metrics.lastProcessingUs.store(processingUs);
+
+                // Update max processing time if needed
+                long long prevMax = metrics.maxProcessingUs.load();
+                while (processingUs > prevMax &&
+                       !metrics.maxProcessingUs.compare_exchange_weak(prevMax, processingUs)) {}
+
+                metrics.msgCount.fetch_add(1);
+            } catch (const std::exception& ex) {
+                printf("Error processing message: %s\n", ex.what());
+            }
+        });
+
+        webSocket.start();
+
+        // Wait until WebSocket is connected before fetching the snapshot
+        {
+            std::unique_lock<std::mutex> lock(wsReadyMutex);
+            wsReady.wait(lock, [this] { return wsConnected; });
+        }
+
+        // Retry logic for snapshot fetching
+        for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+            printf("Fetching snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
+            if (fetchAndApplySnapshot(orderBook)) {
+                return true;
+            }
+            if (attempt < maxSnapshotRetries) {
+                int delayMs = 1000 * attempt; // simple linear back-off
+                printf("Snapshot fetch failed, retrying in %d ms...\n", delayMs);
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+            }
+        }
+
+        fprintf(stderr, "Failed to fetch snapshot after %d attempts.\n", maxSnapshotRetries);
+        return false;
+    }
+};
+
 
 int main() {
     ix::WebSocket webSocket;
     webSocket.setUrl("wss://stream.binance.com:9443/ws/btcusdt@depth@100ms");
     OrderBook orderBook;
-
-    // Before snapshot is applied we buffer incoming messages and apply them after snapshot is applied
-    std::mutex bufferMutex;
-    std::vector<nlohmann::json> bufferedMessages;
-    std::condition_variable wsReady;
-    std::mutex wsReadyMutex;
-    bool wsConnected = false;
     Metrics metrics;
-    webSocket.setOnMessageCallback([&orderBook, &bufferedMessages, &bufferMutex, &wsReady, &wsReadyMutex, &wsConnected, &metrics](const ix::WebSocketMessagePtr& msg) {
-        if (msg->type == ix::WebSocketMessageType::Open) {
-          std::lock_guard<std::mutex> lock(wsReadyMutex);
-          wsConnected = true;
-          wsReady.notify_one();   // wake up main thread
-          return;
-        }
-        if (msg->type != ix::WebSocketMessageType::Message) {
-            return; // ignore non-message events
-        }
+    LOBApp app;
 
-        try {
-            auto json = nlohmann::json::parse(msg->str);
-            bool buffered = false;
-            {
-                std::lock_guard<std::mutex> lock(bufferMutex);
-                if (!orderBook.isSnapshotApplied()) {
-                    bufferedMessages.push_back(json);
-                    buffered = true;
-                }
-            }
-            if (buffered) return;
-
-            // event lag metric
-            auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-            long long eventLagMs = nowMs - json["E"].get<long long>();
-
-            // processing time metric
-            auto t0 = std::chrono::high_resolution_clock::now();
-            orderBook.applyUpdate(json);
-            auto t1 = std::chrono::high_resolution_clock::now();
-            long long processingUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-            metrics.msgCount++;
-            metrics.lastEventLagMs.store(eventLagMs);
-            metrics.lastProcessingUs.store(processingUs);
-            if (processingUs > metrics.maxProcessingUs.load()) {
-                metrics.maxProcessingUs.store(processingUs);
-            }
-
-        } catch (const nlohmann::json::exception& e) {
-            std::cerr << "Snapshot JSON error: " << e.what() << std::endl;
-        } catch (const std::exception& e) {
-            std::cerr << "Snapshot apply error: " << e.what() << std::endl;
-        }
-    });
-    webSocket.start();
-
-    {
-        std::unique_lock<std::mutex> lock(wsReadyMutex);
-        wsReady.wait(lock, [&wsConnected] { return wsConnected; }); // wait until WebSocket is connected
+    if (!app.initialize(orderBook, webSocket, metrics)) {
+        printf("Failed to initialize LOBApp.\n");
+        return -1;
     }
 
-    // Fetch REST snapshot: GET /api/v3/depth?symbol=BTCUSDT&limit=5000 automatically here
-    ix::HttpClient httpClient;
-    auto response = httpClient.get("https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=5000", std::make_shared<ix::HttpRequestArgs>());
-    if (response->statusCode == 200) {
-        try {
-            auto snapshot = nlohmann::json::parse(response->body);
-            orderBook.applySnapshot(snapshot);
-
-            // Apply buffered messages
-            {
-                std::lock_guard<std::mutex> lock(bufferMutex);
-                for (const auto& msg : bufferedMessages) {
-                    orderBook.applyUpdate(msg);
-                }
-                bufferedMessages.clear();
-            }
-        } catch (const nlohmann::json::parse_error& e) {
-            std::cerr << "JSON parse error: " << e.what() << std::endl;
-        }
-    } else {
-        std::cerr << "Failed to fetch snapshot: HTTP " << response->statusCode << std::endl;
-    }
-
-
-    while(true) {
+    while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(5));
         orderBook.printOrderBookStats();
         printf("Metrics - Total Messages: %lld, Last Event Lag (ms): %lld, Last Processing Time (us): %lld, Max Processing Time (us): %lld\n",
                metrics.msgCount.load(), metrics.lastEventLagMs.load(), metrics.lastProcessingUs.load(), metrics.maxProcessingUs.load());
-        metrics.maxProcessingUs.store(0); // reset max processing time for the next interval
+        metrics.maxProcessingUs.store(0);
         printf("--------------------------------------------------\n");
     }
 
