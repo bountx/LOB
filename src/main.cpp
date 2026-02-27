@@ -10,6 +10,7 @@
 #include <chrono>
 #include <thread>
 #include <iomanip>
+#include <charconv>
 
 class OrderBook {
 private:
@@ -20,16 +21,13 @@ private:
     std::map<long long /*price*/, long long /*quantity*/, std::greater<long long>> bids;
 
     long long parseDecimal(const std::string& str) {
-        size_t dotPos = str.find('.');
-        if (dotPos == std::string::npos) {
-            return std::stoll(str) * 100000000; // No decimal point, multiply by 10^8
+        std::from_chars_result result;
+        long long value;
+        result = std::from_chars(str.data(), str.data() + str.size(), value);
+        if (result.ec == std::errc()) {
+            return value;
         } else {
-            std::string integerPart = str.substr(0, dotPos);
-            std::string fractionalPart = str.substr(dotPos + 1);
-            while (fractionalPart.length() < 8) {
-                fractionalPart += '0'; // Pad with zeros to ensure 8 decimal places
-            }
-            return std::stoll(integerPart) * 100000000 + std::stoll(fractionalPart.substr(0, 8));
+            throw std::runtime_error("Failed to parse decimal string: " + str);
         }
     }
 
@@ -67,8 +65,7 @@ public:
         }
         for (const auto& ask : update["a"]) {
             long long price = parseDecimal(ask[0].get<std::string>());
-            long long quantity = 
-            parseDecimal(ask[1].get<std::string>());
+            long long quantity = parseDecimal(ask[1].get<std::string>());
             if (quantity == 0) {
                 asks.erase(price);
             } else {
