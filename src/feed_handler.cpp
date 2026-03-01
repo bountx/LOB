@@ -40,6 +40,104 @@ bool FeedHandler::fetchAndApplySnapshot(OrderBook& orderBook) {
     }
 }
 
+void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg, OrderBook& orderBook,
+                                  Metrics& metrics) {
+    if (msg->type == ix::WebSocketMessageType::Open) {
+        printf("WebSocket connection opened.\n");
+        std::lock_guard<std::mutex> lock(wsReadyMutex);
+        wsConnected = true;
+        wsReady.notify_one();
+        return;
+    }
+    if (msg->type == ix::WebSocketMessageType::Close) {
+        printf("WebSocket connection closed.\n");
+        return;
+    }
+    if (msg->type == ix::WebSocketMessageType::Error) {
+        printf("WebSocket error: %s\n", msg->errorInfo.reason.c_str());
+        return;
+    }
+    if (msg->type != ix::WebSocketMessageType::Message) {
+        return;
+    }
+
+    try {
+        auto jsonMsg = nlohmann::json::parse(msg->str);
+
+        // Buffer until snapshot is applied
+        {
+            std::lock_guard<std::mutex> lock(bufferMutex);
+            if (!orderBook.isSnapshotApplied()) {
+                printf(
+                    "Buffering message until snapshot is applied. Message event time: %lld\n",
+                    jsonMsg["E"].get<long long>());
+                bufferedMessages.push_back(std::move(jsonMsg));
+                return;
+            }
+        }
+
+        // Event lag metric
+        long long eventTime = jsonMsg["E"].get<long long>();
+        long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch())
+                            .count();
+        metrics.lastEventLagMs.store(now - eventTime);
+
+        // Processing time metric
+        auto start = std::chrono::high_resolution_clock::now();
+        if (!orderBook.applyUpdate(jsonMsg)) {
+            printf("Restarting from scratch due to missed updates.\n");
+            orderBook.clear();  // sets snapshotApplied = false
+            {
+                std::lock_guard<std::mutex> lock(bufferMutex);
+                bufferedMessages.clear();
+            }
+            {
+                std::lock_guard<std::mutex> lock(resyncMutex);
+                needsResync = true;
+            }
+            resyncCv.notify_one();
+            return;
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        long long processingUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        metrics.lastProcessingUs.store(processingUs);
+
+        // Update max processing time if needed
+        long long prevMax = metrics.maxProcessingUs.load();
+        while (processingUs > prevMax &&
+               !metrics.maxProcessingUs.compare_exchange_weak(prevMax, processingUs)) {
+        }
+
+        metrics.msgCount.fetch_add(1);
+    } catch (const std::exception& ex) {
+        printf("Error processing message: %s\n", ex.what());
+    }
+}
+
+void FeedHandler::runResyncWorker(OrderBook& orderBook, int maxSnapshotRetries,
+                                  std::stop_token stoken) {
+    std::stop_callback wake(stoken, [this] { resyncCv.notify_one(); });
+    while (!stoken.stop_requested()) {
+        {
+            std::unique_lock<std::mutex> lock(resyncMutex);
+            resyncCv.wait(lock, [&] { return needsResync || stoken.stop_requested(); });
+            if (stoken.stop_requested()) { break; }
+            needsResync = false;
+        }
+        for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+            printf("Re-sync snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
+            if (fetchAndApplySnapshot(orderBook)) { break; }
+            if (attempt < maxSnapshotRetries && !stoken.stop_requested()) {
+                int delayMs = 1000 * attempt;
+                printf("Re-sync failed, retrying in %d ms...\n", delayMs);
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+            }
+        }
+    }
+}
+
 bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Metrics& metrics,
                              int maxSnapshotRetries) {
     // Reset state for a fresh initialization
@@ -55,78 +153,7 @@ bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Met
 
     webSocket.setOnMessageCallback([&orderBook, &metrics, this,
                                     &webSocket](const ix::WebSocketMessagePtr& msg) {
-        if (msg->type == ix::WebSocketMessageType::Open) {
-            printf("WebSocket connection opened.\n");
-            std::lock_guard<std::mutex> lock(wsReadyMutex);
-            wsConnected = true;
-            wsReady.notify_one();
-            return;
-        }
-        if (msg->type == ix::WebSocketMessageType::Close) {
-            printf("WebSocket connection closed.\n");
-            return;
-        }
-        if (msg->type == ix::WebSocketMessageType::Error) {
-            printf("WebSocket error: %s\n", msg->errorInfo.reason.c_str());
-            return;
-        }
-        if (msg->type != ix::WebSocketMessageType::Message) {
-            return;
-        }
-
-        try {
-            auto jsonMsg = nlohmann::json::parse(msg->str);
-
-            // Buffer until snapshot is applied
-            {
-                std::lock_guard<std::mutex> lock(bufferMutex);
-                if (!orderBook.isSnapshotApplied()) {
-                    printf(
-                        "Buffering message until snapshot is applied. Message event time: %lld\n",
-                        jsonMsg["E"].get<long long>());
-                    bufferedMessages.push_back(std::move(jsonMsg));
-                    return;
-                }
-            }
-
-            // Event lag metric
-            long long eventTime = jsonMsg["E"].get<long long>();
-            long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
-                                .count();
-            metrics.lastEventLagMs.store(now - eventTime);
-
-            // Processing time metric
-            auto start = std::chrono::high_resolution_clock::now();
-            if (!orderBook.applyUpdate(jsonMsg)) {
-                printf("Restarting from scratch due to missed updates.\n");
-                orderBook.clear();  // sets snapshotApplied = false
-                {
-                    std::lock_guard<std::mutex> lock(bufferMutex);
-                    bufferedMessages.clear();
-                }
-                {
-                    std::lock_guard<std::mutex> lock(resyncMutex);
-                    needsResync = true;
-                }
-                resyncCv.notify_one();
-                return;
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-            long long processingUs =
-                std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-            metrics.lastProcessingUs.store(processingUs);
-
-            // Update max processing time if needed
-            long long prevMax = metrics.maxProcessingUs.load();
-            while (processingUs > prevMax &&
-                   !metrics.maxProcessingUs.compare_exchange_weak(prevMax, processingUs)) {
-            }
-
-            metrics.msgCount.fetch_add(1);
-        } catch (const std::exception& ex) {
-            printf("Error processing message: %s\n", ex.what());
-        }
+        handleWsMessage(msg, orderBook, metrics);
     });
 
     if (webSocket.getReadyState() == ix::ReadyState::Closed) {
@@ -137,30 +164,10 @@ bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Met
         wsReady.wait(lock, [this] { return wsConnected; });
     }
 
-    // Start dedicated resync worker: waits for the callback signal and
-    // performs fetchAndApplySnapshot off the IXWebSocket event loop.
-    // Stored as a member std::jthread so its destructor automatically
-    // calls request_stop() + join() when FeedHandler is destroyed.
+    // Start dedicated resync worker
     resyncThread =
         std::jthread([this, ob = &orderBook, maxSnapshotRetries](std::stop_token stoken) {
-            std::stop_callback wake(stoken, [this] { resyncCv.notify_one(); });
-            while (!stoken.stop_requested()) {
-                {
-                    std::unique_lock<std::mutex> lock(resyncMutex);
-                    resyncCv.wait(lock, [&] { return needsResync || stoken.stop_requested(); });
-                    if (stoken.stop_requested()) { break; }
-                    needsResync = false;
-                }
-                for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-                    printf("Re-sync snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
-                    if (fetchAndApplySnapshot(*ob)) { break; }
-                    if (attempt < maxSnapshotRetries && !stoken.stop_requested()) {
-                        int delayMs = 1000 * attempt;
-                        printf("Re-sync failed, retrying in %d ms...\n", delayMs);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-                    }
-                }
-            }
+            runResyncWorker(*ob, maxSnapshotRetries, stoken);
         });
 
     // Retry logic for snapshot fetching
