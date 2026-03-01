@@ -23,7 +23,11 @@ bool FeedHandler::fetchAndApplySnapshot(OrderBook& orderBook) {
         // Apply buffered messages that arrived while we were fetching
         std::lock_guard<std::mutex> lock(bufferMutex);
         for (const auto& msg : bufferedMessages) {
-            orderBook.applyUpdate(msg);
+            if (!orderBook.applyUpdate(msg)) {
+                fprintf(stderr, "Buffered message caused re-sync condition\n");
+                bufferedMessages.clear();
+                return false;  // Trigger retry
+            }
         }
         bufferedMessages.clear();
         return true;
