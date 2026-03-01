@@ -7,6 +7,9 @@ bin/
 vcpkg_installed/
 .vcpkg-root
 
+# Secrets
+.env
+
 # IDE folders
 .vscode/
 .idea/

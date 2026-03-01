@@ -12,11 +12,11 @@
 class MetricsServer {
 public:
     MetricsServer(Metrics& metrics, OrderBook& book, int port = 9090)
-        : metrics_(metrics), book_(book), port_(port) {}
+        : metrics(metrics), book(book), port(port) {}
 
     ~MetricsServer() {
-        svr_.stop();
-        if (thread_.joinable()) thread_.join();
+        svr.stop();
+        if (thread.joinable()) { thread.join(); }
     }
 
     MetricsServer(const MetricsServer&) = delete;
@@ -27,31 +27,31 @@ public:
     // Returns true if the server successfully bound and is listening.
     // Safe to call only once; subsequent calls return true immediately.
     bool start() {
-        if (started_) return true;
+        if (started) { return true; }
 
-        svr_.Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
+        svr.Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
             res.set_content(buildPrometheusMetrics(), "text/plain; version=0.0.4; charset=utf-8");
         });
-        svr_.Get("/health", [](const httplib::Request&, httplib::Response& res) {
+        svr.Get("/health", [](const httplib::Request&, httplib::Response& res) {
             res.set_content("ok\n", "text/plain");
         });
 
         std::promise<bool> bound;
         auto future = bound.get_future();
-        thread_ = std::thread([this, p = std::move(bound)]() mutable {
-            const bool ok = svr_.bind_to_port("0.0.0.0", port_);
+        thread = std::thread([this, p = std::move(bound)]() mutable {
+            const bool ok = svr.bind_to_port("0.0.0.0", port);
             p.set_value(ok);
-            if (ok) svr_.listen_after_bind();
+            if (ok) { svr.listen_after_bind(); }
         });
 
-        started_ = future.get();  // wait until bind succeeds or fails
-        if (!started_) thread_.join();
-        return started_;
+        started = future.get();  // wait until bind succeeds or fails
+        if (!started) { thread.join(); }
+        return started;
     }
 
 private:
     std::string buildPrometheusMetrics() {
-        const auto stats = book_.getStats();
+        const auto stats = book.getStats();
         std::ostringstream ss;
 
         auto writeCounter = [&](const char* name, const char* help, long long value) {
@@ -66,15 +66,15 @@ private:
         };
 
         writeCounter("lob_messages_total", "Total messages received from Binance",
-                     metrics_.msgCount.load());
+                     metrics.msgCount.load());
         writeGauge("lob_event_lag_milliseconds", "Last event lag in milliseconds",
-                   static_cast<double>(metrics_.lastEventLagMs.load()));
+                   static_cast<double>(metrics.lastEventLagMs.load()));
         writeGauge("lob_processing_time_microseconds",
                    "Last update processing time in microseconds",
-                   static_cast<double>(metrics_.lastProcessingUs.load()));
+                   static_cast<double>(metrics.lastProcessingUs.load()));
         writeGauge("lob_max_processing_time_microseconds",
                    "Maximum observed processing time in microseconds",
-                   static_cast<double>(metrics_.maxProcessingUs.load()));
+                   static_cast<double>(metrics.maxProcessingUs.load()));
         writeGauge("lob_orderbook_asks_count", "Number of ask price levels in the order book",
                    static_cast<double>(stats.asksCount));
         writeGauge("lob_orderbook_bids_count", "Number of bid price levels in the order book",
@@ -92,10 +92,10 @@ private:
         return ss.str();
     }
 
-    Metrics& metrics_;
-    OrderBook& book_;
-    int port_;
-    httplib::Server svr_;
-    std::thread thread_;
-    bool started_ = false;
+    Metrics& metrics;
+    OrderBook& book;
+    int port;
+    httplib::Server svr;
+    std::thread thread;
+    bool started = false;
 };

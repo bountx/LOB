@@ -12,7 +12,7 @@
 #include "decimal.hpp"
 
 namespace {
-constexpr double kPriceScale = kPriceScale;
+constexpr double kPriceScale = 100000000.0;
 }
 
 void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
@@ -100,8 +100,8 @@ OrderBook::Stats OrderBook::getStats() const {
     Stats s;
     s.asksCount = asks.size();
     s.bidsCount = bids.size();
-    if (!asks.empty()) s.bestAsk = static_cast<double>(asks.begin()->first) / kPriceScale;
-    if (!bids.empty()) s.bestBid = static_cast<double>(bids.begin()->first) / kPriceScale;
+    if (!asks.empty()) { s.bestAsk = static_cast<double>(asks.begin()->first) / kPriceScale; }
+    if (!bids.empty()) { s.bestBid = static_cast<double>(bids.begin()->first) / kPriceScale; }
     return s;
 }
 
