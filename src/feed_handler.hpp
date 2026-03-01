@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -27,4 +28,7 @@ private:
     std::jthread resyncThread;
 
     bool fetchAndApplySnapshot(OrderBook& orderBook);
+    void handleWsMessage(const ix::WebSocketMessagePtr& msg, OrderBook& orderBook,
+                         Metrics& metrics);
+    void runResyncWorker(OrderBook& orderBook, int maxSnapshotRetries, std::stop_token stoken);
 };
