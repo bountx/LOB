@@ -6,6 +6,7 @@
 
 #include "feed_handler.hpp"
 #include "metrics.hpp"
+#include "metrics_server.hpp"
 #include "order_book.hpp"
 
 /*
@@ -28,6 +29,14 @@ int main() {
     OrderBook orderBook;
     Metrics metrics;
     FeedHandler feedHandler;
+
+    MetricsServer metricsServer(metrics, orderBook);
+    if (metricsServer.start()) {
+        printf("Metrics available at http://0.0.0.0:9090/metrics\n");
+    } else {
+        printf("Failed to bind metrics server on port 9090.\n");
+        return -1;
+    }
 
     if (!feedHandler.initialize(orderBook, webSocket, metrics)) {
         printf("Failed to initialize FeedHandler.\n");

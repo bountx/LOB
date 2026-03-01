@@ -11,6 +11,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(httplib CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 
 # Tell CMake to build an executable named 'lob_app' from your main.cpp
@@ -25,4 +26,5 @@ target_link_libraries(lob_app PRIVATE
     Threads::Threads
     ixwebsocket::ixwebsocket
     nlohmann_json::nlohmann_json
+    httplib::httplib
 )

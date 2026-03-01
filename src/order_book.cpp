@@ -11,6 +11,10 @@
 
 #include "decimal.hpp"
 
+namespace {
+constexpr double kPriceScale = 100000000.0;
+}
+
 void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     asks.clear();
@@ -91,18 +95,28 @@ std::map<long long, long long, std::greater<>> OrderBook::getBids() const {
 
 bool OrderBook::isSnapshotApplied() const { return snapshotApplied.load(); }
 
+OrderBook::Stats OrderBook::getStats() const {
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    Stats s;
+    s.asksCount = asks.size();
+    s.bidsCount = bids.size();
+    if (!asks.empty()) { s.bestAsk = static_cast<double>(asks.begin()->first) / kPriceScale; }
+    if (!bids.empty()) { s.bestBid = static_cast<double>(bids.begin()->first) / kPriceScale; }
+    return s;
+}
+
 void OrderBook::printOrderBook() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     std::cout << "Last Update ID: " << lastUpdateId << '\n';
     std::cout << "Asks:" << '\n';
     for (const auto& ask : asks) {
-        std::cout << "Price: " << static_cast<double>(ask.first) / 100000000.0
-                  << ", Quantity: " << static_cast<double>(ask.second) / 100000000.0 << '\n';
+        std::cout << "Price: " << static_cast<double>(ask.first) / kPriceScale
+                  << ", Quantity: " << static_cast<double>(ask.second) / kPriceScale << '\n';
     }
     std::cout << "Bids:" << '\n';
     for (const auto& bid : bids) {
-        std::cout << "Price: " << static_cast<double>(bid.first) / 100000000.0
-                  << ", Quantity: " << static_cast<double>(bid.second) / 100000000.0 << '\n';
+        std::cout << "Price: " << static_cast<double>(bid.first) / kPriceScale
+                  << ", Quantity: " << static_cast<double>(bid.second) / kPriceScale << '\n';
     }
 }
 
@@ -111,8 +125,8 @@ void OrderBook::printOrderBookStats() const {
     std::cout << "Total Asks: " << asks.size() << ", Total Bids: " << bids.size() << '\n';
     std::cout << std::fixed << std::setprecision(2)
               << "Best Ask: "
-              << (asks.empty() ? 0.0 : static_cast<double>(asks.begin()->first) / 100000000.0)
+              << (asks.empty() ? 0.0 : static_cast<double>(asks.begin()->first) / kPriceScale)
               << ", Best Bid: "
-              << (bids.empty() ? 0.0 : static_cast<double>(bids.begin()->first) / 100000000.0)
+              << (bids.empty() ? 0.0 : static_cast<double>(bids.begin()->first) / kPriceScale)
               << '\n';
 }
