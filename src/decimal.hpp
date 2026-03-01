@@ -9,7 +9,7 @@ inline long long parseDecimal(const std::string& str) {
         // No decimal point
         long long value;
         auto result = std::from_chars(str.data(), str.data() + str.size(), value);
-        if (result.ec != std::errc()) {
+        if (result.ec != std::errc() || result.ptr != str.data() + str.size()) {
             throw std::runtime_error("Failed to parse integer: " + str);
         }
         return value * 100000000;
@@ -18,7 +18,7 @@ inline long long parseDecimal(const std::string& str) {
         long long intPart = 0;
         if (dotPos > 0) {
             auto result = std::from_chars(str.data(), str.data() + dotPos, intPart);
-            if (result.ec != std::errc()) {
+            if (result.ec != std::errc() || result.ptr != str.data() + dotPos) {
                 throw std::runtime_error("Failed to parse integer part: " + str);
             }
         }
@@ -27,15 +27,18 @@ inline long long parseDecimal(const std::string& str) {
         long long fracPart = 0;
         if (dotPos + 1 < str.size()) {
             std::string fracStr = str.substr(dotPos + 1);
+            if (fracStr.length() > 8) {
+                throw std::runtime_error("Too many fractional digits: " + str);
+            }
             while (fracStr.length() < 8) fracStr += '0';
-            fracStr = fracStr.substr(0, 8);
             auto result =
                 std::from_chars(fracStr.data(), fracStr.data() + fracStr.size(), fracPart);
-            if (result.ec != std::errc()) {
+            if (result.ec != std::errc() || result.ptr != fracStr.data() + fracStr.size()) {
                 throw std::runtime_error("Failed to parse fractional part: " + str);
             }
         }
 
-        return intPart * 100000000 + fracPart;
+        // For negative intPart, subtract fracPart instead of adding
+        return (intPart < 0) ? intPart * 100000000 - fracPart : intPart * 100000000 + fracPart;
     }
 };
