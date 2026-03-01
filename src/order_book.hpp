@@ -13,13 +13,13 @@ public:
     bool isSnapshotApplied() const;
     void printOrderBook() const;
     void printOrderBookStats() const;
-    std::map<long long, long long, std::less<long long>> getAsks() const;
-    std::map<long long, long long, std::greater<long long>> getBids() const;
+    std::map<long long, long long, std::less<>> getAsks() const;
+    std::map<long long, long long, std::greater<>> getBids() const;
 
 private:
     mutable std::mutex orderBookMutex;
     long long lastUpdateId = 0;
     std::atomic<bool> snapshotApplied{false};
-    std::map<long long, long long, std::less<long long>> asks;
-    std::map<long long, long long, std::greater<long long>> bids;
+    std::map<long long, long long, std::less<>> asks;
+    std::map<long long, long long, std::greater<>> bids;
 };

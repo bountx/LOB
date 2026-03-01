@@ -79,12 +79,12 @@ long long OrderBook::getLastUpdateId() const {
     return lastUpdateId;
 }
 
-std::map<long long, long long, std::less<long long>> OrderBook::getAsks() const {
+std::map<long long, long long, std::less<>> OrderBook::getAsks() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     return asks;
 }
 
-std::map<long long, long long, std::greater<long long>> OrderBook::getBids() const {
+std::map<long long, long long, std::greater<>> OrderBook::getBids() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     return bids;
 }
@@ -93,24 +93,26 @@ bool OrderBook::isSnapshotApplied() const { return snapshotApplied.load(); }
 
 void OrderBook::printOrderBook() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
-    std::cout << "Last Update ID: " << lastUpdateId << std::endl;
-    std::cout << "Asks:" << std::endl;
+    std::cout << "Last Update ID: " << lastUpdateId << '\n';
+    std::cout << "Asks:" << '\n';
     for (const auto& ask : asks) {
-        std::cout << "Price: " << ask.first / 100000000.0
-                  << ", Quantity: " << ask.second / 100000000.0 << std::endl;
+        std::cout << "Price: " << static_cast<double>(ask.first) / 100000000.0
+                  << ", Quantity: " << static_cast<double>(ask.second) / 100000000.0 << '\n';
     }
-    std::cout << "Bids:" << std::endl;
+    std::cout << "Bids:" << '\n';
     for (const auto& bid : bids) {
-        std::cout << "Price: " << bid.first / 100000000.0
-                  << ", Quantity: " << bid.second / 100000000.0 << std::endl;
+        std::cout << "Price: " << static_cast<double>(bid.first) / 100000000.0
+                  << ", Quantity: " << static_cast<double>(bid.second) / 100000000.0 << '\n';
     }
 }
 
 void OrderBook::printOrderBookStats() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
-    std::cout << "Total Asks: " << asks.size() << ", Total Bids: " << bids.size() << std::endl;
+    std::cout << "Total Asks: " << asks.size() << ", Total Bids: " << bids.size() << '\n';
     std::cout << std::fixed << std::setprecision(2)
-              << "Best Ask: " << (asks.empty() ? 0 : asks.begin()->first / 100000000.0)
-              << ", Best Bid: " << (bids.empty() ? 0 : bids.begin()->first / 100000000.0)
-              << std::endl;
+              << "Best Ask: "
+              << (asks.empty() ? 0.0 : static_cast<double>(asks.begin()->first) / 100000000.0)
+              << ", Best Bid: "
+              << (bids.empty() ? 0.0 : static_cast<double>(bids.begin()->first) / 100000000.0)
+              << '\n';
 }

@@ -148,12 +148,12 @@ bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Met
                 {
                     std::unique_lock<std::mutex> lock(resyncMutex);
                     resyncCv.wait(lock, [&] { return needsResync || stoken.stop_requested(); });
-                    if (stoken.stop_requested()) break;
+                    if (stoken.stop_requested()) { break; }
                     needsResync = false;
                 }
                 for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
                     printf("Re-sync snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
-                    if (fetchAndApplySnapshot(*ob)) break;
+                    if (fetchAndApplySnapshot(*ob)) { break; }
                     if (attempt < maxSnapshotRetries && !stoken.stop_requested()) {
                         int delayMs = 1000 * attempt;
                         printf("Re-sync failed, retrying in %d ms...\n", delayMs);
