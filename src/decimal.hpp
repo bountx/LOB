@@ -4,6 +4,7 @@
 #include <string>
 
 inline long long parseDecimal(const std::string& str) {
+    bool negative = !str.empty() && str[0] == '-';
     size_t dotPos = str.find('.');
     if (dotPos == std::string::npos) {
         // No decimal point
@@ -39,6 +40,6 @@ inline long long parseDecimal(const std::string& str) {
         }
 
         // For negative intPart, subtract fracPart instead of adding
-        return (intPart < 0) ? intPart * 100000000 - fracPart : intPart * 100000000 + fracPart;
+        return negative ? intPart * 100000000 - fracPart : intPart * 100000000 + fracPart;
     }
 };
