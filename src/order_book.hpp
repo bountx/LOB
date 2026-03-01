@@ -6,11 +6,19 @@
 
 class OrderBook {
 public:
+    struct Stats {
+        std::size_t asksCount = 0;
+        std::size_t bidsCount = 0;
+        double bestAsk = 0.0;
+        double bestBid = 0.0;
+    };
+
     void applySnapshot(const nlohmann::json& snapshot);
     bool applyUpdate(const nlohmann::json& update);
     void clear();
     long long getLastUpdateId() const;
     bool isSnapshotApplied() const;
+    Stats getStats() const;
     void printOrderBook() const;
     void printOrderBookStats() const;
     std::map<long long, long long, std::less<>> getAsks() const;

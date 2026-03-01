@@ -91,6 +91,16 @@ std::map<long long, long long, std::greater<>> OrderBook::getBids() const {
 
 bool OrderBook::isSnapshotApplied() const { return snapshotApplied.load(); }
 
+OrderBook::Stats OrderBook::getStats() const {
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    Stats s;
+    s.asksCount = asks.size();
+    s.bidsCount = bids.size();
+    if (!asks.empty()) s.bestAsk = static_cast<double>(asks.begin()->first) / 100000000.0;
+    if (!bids.empty()) s.bestBid = static_cast<double>(bids.begin()->first) / 100000000.0;
+    return s;
+}
+
 void OrderBook::printOrderBook() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     std::cout << "Last Update ID: " << lastUpdateId << '\n';
