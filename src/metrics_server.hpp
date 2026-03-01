@@ -1,6 +1,7 @@
 #pragma once
 #include <httplib.h>
 
+#include <future>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -18,14 +19,34 @@ public:
         if (thread_.joinable()) thread_.join();
     }
 
-    void start() {
+    MetricsServer(const MetricsServer&) = delete;
+    MetricsServer& operator=(const MetricsServer&) = delete;
+    MetricsServer(MetricsServer&&) = delete;
+    MetricsServer& operator=(MetricsServer&&) = delete;
+
+    // Returns true if the server successfully bound and is listening.
+    // Safe to call only once; subsequent calls return true immediately.
+    bool start() {
+        if (started_) return true;
+
         svr_.Get("/metrics", [this](const httplib::Request&, httplib::Response& res) {
             res.set_content(buildPrometheusMetrics(), "text/plain; version=0.0.4; charset=utf-8");
         });
         svr_.Get("/health", [](const httplib::Request&, httplib::Response& res) {
             res.set_content("ok\n", "text/plain");
         });
-        thread_ = std::thread([this] { svr_.listen("0.0.0.0", port_); });
+
+        std::promise<bool> bound;
+        auto future = bound.get_future();
+        thread_ = std::thread([this, p = std::move(bound)]() mutable {
+            const bool ok = svr_.bind_to_port("0.0.0.0", port_);
+            p.set_value(ok);
+            if (ok) svr_.listen_after_bind();
+        });
+
+        started_ = future.get();  // wait until bind succeeds or fails
+        if (!started_) thread_.join();
+        return started_;
     }
 
 private:
@@ -58,10 +79,15 @@ private:
                    static_cast<double>(stats.asksCount));
         writeGauge("lob_orderbook_bids_count", "Number of bid price levels in the order book",
                    static_cast<double>(stats.bidsCount));
-        writeGauge("lob_orderbook_best_ask_price", "Best ask price in USD", stats.bestAsk);
-        writeGauge("lob_orderbook_best_bid_price", "Best bid price in USD", stats.bestBid);
-        writeGauge("lob_orderbook_spread_price", "Spread between best ask and best bid in USD",
-                   stats.bestAsk - stats.bestBid);
+
+        // Only emit price and spread metrics when the book has been populated.
+        if (stats.bestAsk > 0.0 && stats.bestBid > 0.0) {
+            writeGauge("lob_orderbook_best_ask_price", "Best ask price in USD", stats.bestAsk);
+            writeGauge("lob_orderbook_best_bid_price", "Best bid price in USD", stats.bestBid);
+            writeGauge("lob_orderbook_spread_price",
+                       "Spread between best ask and best bid in USD",
+                       stats.bestAsk - stats.bestBid);
+        }
 
         return ss.str();
     }
@@ -71,4 +97,5 @@ private:
     int port_;
     httplib::Server svr_;
     std::thread thread_;
+    bool started_ = false;
 };

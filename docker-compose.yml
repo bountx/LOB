@@ -4,9 +4,15 @@ services:
     restart: unless-stopped
     # Port 9090 is only exposed to other containers, not the host.
     # Prometheus scrapes it directly via the internal Docker network.
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.53.0
     restart: unless-stopped
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -19,10 +25,11 @@ services:
     ports:
       - "127.0.0.1:9091:9090"  # Prometheus UI accessible only from localhost
     depends_on:
-      - lob
+      lob:
+        condition: service_healthy
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.1.0
     restart: unless-stopped
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -33,7 +40,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin   # change this after first login
       - GF_USERS_ALLOW_SIGN_UP=false
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"  # access via SSH tunnel: ssh -L 3000:localhost:3000 root@46.225.97.243
     depends_on:
       - prometheus
 

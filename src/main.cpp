@@ -31,8 +31,12 @@ int main() {
     FeedHandler feedHandler;
 
     MetricsServer metricsServer(metrics, orderBook);
-    metricsServer.start();
-    printf("Metrics available at http://0.0.0.0:9090/metrics\n");
+    if (metricsServer.start()) {
+        printf("Metrics available at http://0.0.0.0:9090/metrics\n");
+    } else {
+        printf("Failed to bind metrics server on port 9090.\n");
+        return -1;
+    }
 
     if (!feedHandler.initialize(orderBook, webSocket, metrics)) {
         printf("Failed to initialize FeedHandler.\n");
