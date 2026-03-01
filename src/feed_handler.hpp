@@ -17,6 +17,9 @@ public:
 private:
     std::mutex bufferMutex;
     std::vector<nlohmann::json> bufferedMessages;
+    std::mutex resyncMutex;
+    std::condition_variable resyncCv;
+    bool needsResync = false;
     std::mutex wsReadyMutex;
     std::condition_variable wsReady;
     bool wsConnected = false;

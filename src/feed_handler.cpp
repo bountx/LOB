@@ -8,9 +8,11 @@
 
 bool FeedHandler::fetchAndApplySnapshot(OrderBook& orderBook) {
     ix::HttpClient httpClient;
-    auto response = httpClient.get("https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=5000",
-                                   std::make_shared<ix::HttpRequestArgs>());
-
+    auto args = std::make_shared<ix::HttpRequestArgs>();
+    args->connectTimeout = 5;    // seconds
+    args->transferTimeout = 30;  // seconds
+    auto response =
+        httpClient.get("https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=5000", args);
     if (response->statusCode != 200) {
         fprintf(stderr, "Failed to fetch snapshot: HTTP %d\n", response->statusCode);
         return false;
@@ -102,7 +104,11 @@ bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Met
                     std::lock_guard<std::mutex> lock(bufferMutex);
                     bufferedMessages.clear();
                 }
-                fetchAndApplySnapshot(orderBook);
+                {
+                    std::lock_guard<std::mutex> lock(resyncMutex);
+                    needsResync = true;
+                }
+                resyncCv.notify_one();
                 return;
             }
             auto end = std::chrono::high_resolution_clock::now();
@@ -129,6 +135,27 @@ bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Met
         std::unique_lock<std::mutex> lock(wsReadyMutex);
         wsReady.wait(lock, [this] { return wsConnected; });
     }
+
+    // Start dedicated resync worker: waits for the callback signal and
+    // performs fetchAndApplySnapshot off the IXWebSocket event loop.
+    std::thread([this, &orderBook, maxSnapshotRetries]() {
+        while (true) {
+            {
+                std::unique_lock<std::mutex> lock(resyncMutex);
+                resyncCv.wait(lock, [this] { return needsResync; });
+                needsResync = false;
+            }
+            for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+                printf("Re-sync snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
+                if (fetchAndApplySnapshot(orderBook)) break;
+                if (attempt < maxSnapshotRetries) {
+                    int delayMs = 1000 * attempt;
+                    printf("Re-sync failed, retrying in %d ms...\n", delayMs);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                }
+            }
+        }
+    }).detach();
 
     // Retry logic for snapshot fetching
     for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
