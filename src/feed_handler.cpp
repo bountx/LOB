@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <stop_token>
 #include <thread>
 
 bool FeedHandler::fetchAndApplySnapshot(OrderBook& orderBook) {
@@ -138,24 +139,29 @@ bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Met
 
     // Start dedicated resync worker: waits for the callback signal and
     // performs fetchAndApplySnapshot off the IXWebSocket event loop.
-    std::thread([this, &orderBook, maxSnapshotRetries]() {
-        while (true) {
-            {
-                std::unique_lock<std::mutex> lock(resyncMutex);
-                resyncCv.wait(lock, [this] { return needsResync; });
-                needsResync = false;
-            }
-            for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-                printf("Re-sync snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
-                if (fetchAndApplySnapshot(orderBook)) break;
-                if (attempt < maxSnapshotRetries) {
-                    int delayMs = 1000 * attempt;
-                    printf("Re-sync failed, retrying in %d ms...\n", delayMs);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+    // Stored as a member std::jthread so its destructor automatically
+    // calls request_stop() + join() when FeedHandler is destroyed.
+    resyncThread =
+        std::jthread([this, ob = &orderBook, maxSnapshotRetries](std::stop_token stoken) {
+            std::stop_callback wake(stoken, [this] { resyncCv.notify_one(); });
+            while (!stoken.stop_requested()) {
+                {
+                    std::unique_lock<std::mutex> lock(resyncMutex);
+                    resyncCv.wait(lock, [&] { return needsResync || stoken.stop_requested(); });
+                    if (stoken.stop_requested()) break;
+                    needsResync = false;
+                }
+                for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+                    printf("Re-sync snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
+                    if (fetchAndApplySnapshot(*ob)) break;
+                    if (attempt < maxSnapshotRetries && !stoken.stop_requested()) {
+                        int delayMs = 1000 * attempt;
+                        printf("Re-sync failed, retrying in %d ms...\n", delayMs);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                    }
                 }
             }
-        }
-    }).detach();
+        });
 
     // Retry logic for snapshot fetching
     for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {

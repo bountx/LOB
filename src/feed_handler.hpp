@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <thread>
 #include <vector>
 
 #include "metrics.hpp"
@@ -23,6 +24,7 @@ private:
     std::mutex wsReadyMutex;
     std::condition_variable wsReady;
     bool wsConnected = false;
+    std::jthread resyncThread;
 
     bool fetchAndApplySnapshot(OrderBook& orderBook);
 };
