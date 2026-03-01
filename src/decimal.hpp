@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-long long parseDecimal(const std::string& str) {
+inline long long parseDecimal(const std::string& str) {
     size_t dotPos = str.find('.');
     if (dotPos == std::string::npos) {
         // No decimal point
