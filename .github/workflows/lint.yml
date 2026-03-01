@@ -1,0 +1,30 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  clang-tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tidy cmake ninja-build
+      - name: Install vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Run clang-tidy
+        run: |
+          clang-tidy -p build --header-filter='src/.*\.hpp' src/*.cpp
