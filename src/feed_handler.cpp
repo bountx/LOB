@@ -92,13 +92,13 @@ bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Met
             // Processing time metric
             auto start = std::chrono::high_resolution_clock::now();
             if (!orderBook.applyUpdate(jsonMsg)) {
-                // Missed updates — trigger re-sync on a separate thread so we
-                // don't block the WebSocket callback.
                 printf("Restarting from scratch due to missed updates.\n");
-                orderBook.clear();
-                std::thread([this, &orderBook, &webSocket, &metrics]() {
-                    this->initialize(orderBook, webSocket, metrics);
-                }).detach();
+                orderBook.clear();  // sets snapshotApplied = false
+                {
+                    std::lock_guard<std::mutex> lock(bufferMutex);
+                    bufferedMessages.clear();
+                }
+                fetchAndApplySnapshot(orderBook);
                 return;
             }
             auto end = std::chrono::high_resolution_clock::now();
@@ -118,10 +118,10 @@ bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Met
         }
     });
 
-    webSocket.start();
+    if (webSocket.getReadyState() == ix::ReadyState::Closed) {
+        webSocket.start();
 
-    // Wait until WebSocket is connected before fetching the snapshot
-    {
+        // Wait until WebSocket is connected before fetching the snapshot
         std::unique_lock<std::mutex> lock(wsReadyMutex);
         wsReady.wait(lock, [this] { return wsConnected; });
     }

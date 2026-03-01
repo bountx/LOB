@@ -13,6 +13,8 @@
 
 void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
     std::lock_guard<std::mutex> lock(orderBookMutex);
+    asks.clear();
+    bids.clear();
     lastUpdateId = snapshot["lastUpdateId"].get<long long>();
     for (const auto& ask : snapshot["asks"]) {
         long long price = parseDecimal(ask[0].get<std::string>());
