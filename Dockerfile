@@ -3,8 +3,8 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake git curl zip unzip tar \
-    g++ pkg-config ca-certificates \
+    cmake make git curl zip unzip tar \
+    g++ pkg-config ca-certificates linux-libc-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin vcpkg to the same commit used as builtin-baseline in vcpkg.json
@@ -20,11 +20,16 @@ WORKDIR /build
 # This layer is only rebuilt when vcpkg.json or CMakeLists.txt changes.
 COPY vcpkg.json CMakeLists.txt ./
 
+# CMake checks that source files exist at configure time, so create stubs.
+# The cmake configure + vcpkg install result is cached in this layer.
+RUN mkdir -p src && touch src/main.cpp src/order_book.cpp src/feed_handler.cpp
+
 RUN cmake -B build -S . \
     -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake \
     -DCMAKE_BUILD_TYPE=Release
 
-# Now copy source and compile only the app binary
+# Overwrite stubs with real sources. Only this layer and the build step
+# below are invalidated when source files change.
 COPY src/ ./src/
 RUN cmake --build build -j"$(nproc)"
 
