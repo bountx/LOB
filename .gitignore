@@ -21,3 +21,5 @@ vcpkg_installed/
 *.dylib
 *.exe
 lob_app
+
+config.json

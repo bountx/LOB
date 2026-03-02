@@ -43,6 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN groupadd --system lob && useradd --system --gid lob --no-create-home lob
 
+WORKDIR /app
+
 COPY --from=builder /build/build/lob_app /usr/local/bin/lob_app
 RUN chown lob:lob /usr/local/bin/lob_app
 

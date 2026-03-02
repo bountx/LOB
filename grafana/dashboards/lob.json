@@ -124,12 +124,12 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_best_ask_price",
+          "expr": "lob_orderbook_best_ask_price{symbol=\"BTCUSDT\"}",
           "legendFormat": "Best Ask",
           "refId": "A"
         },
         {
-          "expr": "lob_orderbook_best_bid_price",
+          "expr": "lob_orderbook_best_bid_price{symbol=\"BTCUSDT\"}",
           "legendFormat": "Best Bid",
           "refId": "B"
         }
@@ -157,7 +157,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_spread_price",
+          "expr": "lob_orderbook_spread_price{symbol=\"BTCUSDT\"}",
           "legendFormat": "spread USD",
           "refId": "A"
         }
@@ -185,12 +185,12 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_asks_count",
+          "expr": "lob_orderbook_asks_count{symbol=\"BTCUSDT\"}",
           "legendFormat": "Asks",
           "refId": "A"
         },
         {
-          "expr": "lob_orderbook_bids_count",
+          "expr": "lob_orderbook_bids_count{symbol=\"BTCUSDT\"}",
           "legendFormat": "Bids",
           "refId": "B"
         }
@@ -217,32 +217,32 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_messages_total",
+          "expr": "sum(lob_messages_total)",
           "legendFormat": "Total Messages",
           "refId": "A"
         },
         {
-          "expr": "lob_event_lag_milliseconds",
+          "expr": "lob_event_lag_milliseconds{symbol=\"BTCUSDT\"}",
           "legendFormat": "Event Lag (ms)",
           "refId": "B"
         },
         {
-          "expr": "lob_processing_time_microseconds",
+          "expr": "lob_processing_time_microseconds{symbol=\"BTCUSDT\"}",
           "legendFormat": "Processing (µs)",
           "refId": "C"
         },
         {
-          "expr": "lob_orderbook_best_ask_price",
+          "expr": "lob_orderbook_best_ask_price{symbol=\"BTCUSDT\"}",
           "legendFormat": "Best Ask",
           "refId": "D"
         },
         {
-          "expr": "lob_orderbook_best_bid_price",
+          "expr": "lob_orderbook_best_bid_price{symbol=\"BTCUSDT\"}",
           "legendFormat": "Best Bid",
           "refId": "E"
         },
         {
-          "expr": "lob_orderbook_spread_price",
+          "expr": "lob_orderbook_spread_price{symbol=\"BTCUSDT\"}",
           "legendFormat": "Spread",
           "refId": "F"
         }

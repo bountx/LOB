@@ -16,7 +16,9 @@ inline long long parseFractionalPart(const std::string& str, size_t dotPos) {
     if (fracStr.length() > 8) {
         throw std::runtime_error("Too many fractional digits: " + str);
     }
-    while (fracStr.length() < 8) { fracStr += '0'; }
+    while (fracStr.length() < 8) {
+        fracStr += '0';
+    }
     long long fracPart = 0;
     auto result = std::from_chars(fracStr.data(), fracStr.data() + fracStr.size(), fracPart);
     if (result.ec != std::errc() || result.ptr != fracStr.data() + fracStr.size()) {
@@ -53,8 +55,8 @@ inline long long parseDecimal(const std::string& str) {
 
     long long fracPart = parseFractionalPart(str, dotPos);
     // For negative intPart, subtract fracPart instead of adding
-    return negative ? safeSubstract(safeMultiply(intPart, SCALE, "parseDecimal"), fracPart,
-                                    "parseDecimal")
-                    : safeAdd(safeMultiply(intPart, SCALE, "parseDecimal"), fracPart,
-                              "parseDecimal");
+    return negative
+               ? safeSubstract(safeMultiply(intPart, SCALE, "parseDecimal"), fracPart,
+                               "parseDecimal")
+               : safeAdd(safeMultiply(intPart, SCALE, "parseDecimal"), fracPart, "parseDecimal");
 }

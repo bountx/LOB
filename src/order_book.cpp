@@ -100,8 +100,12 @@ OrderBook::Stats OrderBook::getStats() const {
     Stats s;
     s.asksCount = asks.size();
     s.bidsCount = bids.size();
-    if (!asks.empty()) { s.bestAsk = static_cast<double>(asks.begin()->first) / kPriceScale; }
-    if (!bids.empty()) { s.bestBid = static_cast<double>(bids.begin()->first) / kPriceScale; }
+    if (!asks.empty()) {
+        s.bestAsk = static_cast<double>(asks.begin()->first) / kPriceScale;
+    }
+    if (!bids.empty()) {
+        s.bestBid = static_cast<double>(bids.begin()->first) / kPriceScale;
+    }
     return s;
 }
 
@@ -123,8 +127,7 @@ void OrderBook::printOrderBook() const {
 void OrderBook::printOrderBookStats() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     std::cout << "Total Asks: " << asks.size() << ", Total Bids: " << bids.size() << '\n';
-    std::cout << std::fixed << std::setprecision(2)
-              << "Best Ask: "
+    std::cout << std::fixed << std::setprecision(2) << "Best Ask: "
               << (asks.empty() ? 0.0 : static_cast<double>(asks.begin()->first) / kPriceScale)
               << ", Best Bid: "
               << (bids.empty() ? 0.0 : static_cast<double>(bids.begin()->first) / kPriceScale)
