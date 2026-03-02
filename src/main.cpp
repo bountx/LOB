@@ -45,6 +45,19 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    int updateIntervalMs = 100;
+    if (config.contains("update_interval_ms")) {
+        if (!config["update_interval_ms"].is_number_integer()) {
+            fprintf(stderr, "Config error: 'update_interval_ms' must be an integer (100 or 1000)\n");
+            return -1;
+        }
+        updateIntervalMs = config["update_interval_ms"].get<int>();
+        if (updateIntervalMs != 100 && updateIntervalMs != 1000) {
+            fprintf(stderr, "Config error: 'update_interval_ms' must be 100 or 1000\n");
+            return -1;
+        }
+    }
+
     if (!config.contains("symbols") || !config["symbols"].is_array() || config["symbols"].empty()) {
         fprintf(stderr, "Config error: 'symbols' must be a non-empty array\n");
         return -1;
@@ -71,7 +84,7 @@ int main(int argc, char* argv[]) {
         if (!urlStreams.empty()) {
             urlStreams += "/";
         }
-        urlStreams += lower + "@depth";
+        urlStreams += lower + "@depth@" + std::to_string(updateIntervalMs) + "ms";
     }
     const std::string url = "wss://stream.binance.com:9443/stream?streams=" + urlStreams;
 

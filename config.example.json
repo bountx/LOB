@@ -1,10 +1,11 @@
 {
+  "update_interval_ms": 100,
+  "primary_symbol": "BTCUSDT",
   "symbols": [
     "BTCUSDT",
     "ETHUSDT",
-    "SOLUSDT",
     "BNBUSDT",
+    "SOLUSDT",
     "XRPUSDT"
-  ],
-  "primary_symbol": "BTCUSDT"
+  ]
 }

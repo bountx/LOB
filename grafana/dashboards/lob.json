@@ -34,15 +34,20 @@
     {
       "id": 1,
       "title": "Messages / sec",
-      "description": "Rate of messages received from Binance over the last minute",
+      "description": "Total ingest rate across all symbols, with selected symbol overlaid for comparison",
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(lob_messages_total{symbol=\"$symbol\"}[1m])",
-          "legendFormat": "msg/s",
+          "expr": "sum(rate(lob_messages_total[1m]))",
+          "legendFormat": "total msg/s",
           "refId": "A"
+        },
+        {
+          "expr": "rate(lob_messages_total{symbol=\"$symbol\"}[1m])",
+          "legendFormat": "{{symbol}} msg/s",
+          "refId": "B"
         }
       ],
       "fieldConfig": {
@@ -54,22 +59,27 @@
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "single", "sort": "none" },
+        "tooltip": { "mode": "multi", "sort": "none" },
         "legend": { "displayMode": "list", "placement": "bottom" }
       }
     },
     {
       "id": 2,
       "title": "Event Lag",
-      "description": "Time between the Binance event timestamp and local receive time",
+      "description": "Worst-case lag across all symbols, with selected symbol overlaid for comparison",
       "type": "timeseries",
       "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_event_lag_milliseconds{symbol=\"$symbol\"}",
-          "legendFormat": "lag ms",
+          "expr": "max(lob_event_lag_milliseconds)",
+          "legendFormat": "worst lag ms (all)",
           "refId": "A"
+        },
+        {
+          "expr": "lob_event_lag_milliseconds{symbol=\"$symbol\"}",
+          "legendFormat": "{{symbol}} lag ms",
+          "refId": "B"
         }
       ],
       "fieldConfig": {
@@ -96,20 +106,25 @@
     {
       "id": 3,
       "title": "Update Processing Time",
-      "description": "How long applyUpdate() takes to process each order book delta",
+      "description": "Avg and worst-case processing time across all symbols, with selected symbol overlaid",
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_processing_time_microseconds{symbol=\"$symbol\"}",
-          "legendFormat": "last µs",
+          "expr": "avg(lob_processing_time_microseconds)",
+          "legendFormat": "avg µs (all)",
           "refId": "A"
         },
         {
-          "expr": "lob_max_processing_time_microseconds{symbol=\"$symbol\"}",
-          "legendFormat": "max µs",
+          "expr": "max(lob_max_processing_time_microseconds)",
+          "legendFormat": "max µs (all)",
           "refId": "B"
+        },
+        {
+          "expr": "lob_processing_time_microseconds{symbol=\"$symbol\"}",
+          "legendFormat": "{{symbol}} µs",
+          "refId": "C"
         }
       ],
       "fieldConfig": {
@@ -235,18 +250,18 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_messages_total{symbol=\"$symbol\"}",
-          "legendFormat": "Total Messages",
+          "expr": "sum(lob_messages_total)",
+          "legendFormat": "Total Messages (all)",
           "refId": "A"
         },
         {
-          "expr": "lob_event_lag_milliseconds{symbol=\"$symbol\"}",
-          "legendFormat": "Event Lag (ms)",
+          "expr": "max(lob_event_lag_milliseconds)",
+          "legendFormat": "Worst Lag (ms)",
           "refId": "B"
         },
         {
-          "expr": "lob_processing_time_microseconds{symbol=\"$symbol\"}",
-          "legendFormat": "Processing (µs)",
+          "expr": "avg(lob_processing_time_microseconds)",
+          "legendFormat": "Avg Processing (µs)",
           "refId": "C"
         },
         {
