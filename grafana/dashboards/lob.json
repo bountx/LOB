@@ -40,7 +40,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(lob_messages_total[1m])",
+          "expr": "rate(lob_messages_total{symbol=\"$symbol\"}[1m])",
           "legendFormat": "msg/s",
           "refId": "A"
         }
@@ -67,7 +67,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_event_lag_milliseconds",
+          "expr": "lob_event_lag_milliseconds{symbol=\"$symbol\"}",
           "legendFormat": "lag ms",
           "refId": "A"
         }
@@ -102,12 +102,12 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_processing_time_microseconds",
+          "expr": "lob_processing_time_microseconds{symbol=\"$symbol\"}",
           "legendFormat": "last µs",
           "refId": "A"
         },
         {
-          "expr": "lob_max_processing_time_microseconds",
+          "expr": "lob_max_processing_time_microseconds{symbol=\"$symbol\"}",
           "legendFormat": "max µs",
           "refId": "B"
         }

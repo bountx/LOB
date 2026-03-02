@@ -45,8 +45,7 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    if (!config.contains("symbols") || !config["symbols"].is_array() ||
-        config["symbols"].empty()) {
+    if (!config.contains("symbols") || !config["symbols"].is_array() || config["symbols"].empty()) {
         fprintf(stderr, "Config error: 'symbols' must be a non-empty array\n");
         return -1;
     }
@@ -55,24 +54,34 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    const auto symbols = config["symbols"].get<std::vector<std::string>>();
-    const auto primarySymbol = config["primary_symbol"].get<std::string>();
+    // Validate each entry and canonicalise: UPPERCASE for map keys, lowercase for the URL.
+    std::vector<std::string> symbols;
+    std::string urlStreams;
+    for (const auto& entry : config["symbols"]) {
+        if (!entry.is_string()) {
+            fprintf(stderr, "Config error: every entry in 'symbols' must be a string\n");
+            return -1;
+        }
+        std::string sym = entry.get<std::string>();
+        std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
+        symbols.push_back(sym);
+
+        std::string lower = sym;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (!urlStreams.empty()) {
+            urlStreams += "/";
+        }
+        urlStreams += lower + "@depth";
+    }
+    const std::string url = "wss://stream.binance.com:9443/stream?streams=" + urlStreams;
+
+    std::string primarySymbol = config["primary_symbol"].get<std::string>();
+    std::transform(primarySymbol.begin(), primarySymbol.end(), primarySymbol.begin(), ::toupper);
 
     if (std::find(symbols.begin(), symbols.end(), primarySymbol) == symbols.end()) {
         fprintf(stderr, "Config error: primary_symbol '%s' is not in symbols list\n",
                 primarySymbol.c_str());
         return -1;
-    }
-
-    // Build combo stream URL: wss://.../stream?streams=btcusdt@depth/ethusdt@depth/...
-    std::string url = "wss://stream.binance.com:9443/stream?streams=";
-    for (std::size_t i = 0; i < symbols.size(); ++i) {
-        std::string lower = symbols[i];
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        url += lower + "@depth";
-        if (i + 1 < symbols.size()) {
-            url += "/";
-        }
     }
 
     std::unordered_map<std::string, std::unique_ptr<OrderBook>> books;

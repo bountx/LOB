@@ -9,6 +9,10 @@
 #include <stop_token>
 #include <thread>
 
+namespace {
+constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
+}
+
 std::string FeedHandler::streamToSymbol(const std::string& stream) {
     std::string sym = stream.substr(0, stream.find('@'));
     std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
@@ -89,7 +93,9 @@ void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         {
             std::lock_guard<std::mutex> lock(bufferMutex);
             if (!book.isSnapshotApplied()) {
-                symbolBuffers[symbol].push_back(jsonMsg);
+                if (symbolBuffers[symbol].size() < kMaxBufferedMsgsPerSymbol) {
+                    symbolBuffers[symbol].push_back(jsonMsg);
+                }
                 return;
             }
         }
@@ -156,6 +162,12 @@ void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken
                 std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
             }
         }
+        if (!books->at(symbol)->isSnapshotApplied()) {
+            fprintf(stderr,
+                    "[%s] Re-sync permanently failed after %d attempts. "
+                    "Symbol is inactive — restart to recover.\n",
+                    symbol.c_str(), maxSnapshotRetries);
+        }
     }
 }
 
@@ -185,7 +197,12 @@ bool FeedHandler::initialize(
     if (webSocket.getReadyState() == ix::ReadyState::Closed) {
         webSocket.start();
         std::unique_lock<std::mutex> lock(wsReadyMutex);
-        wsReady.wait(lock, [this] { return wsConnected; });
+        const bool connected =
+            wsReady.wait_for(lock, std::chrono::seconds(30), [this] { return wsConnected; });
+        if (!connected) {
+            fprintf(stderr, "WebSocket failed to connect within 30 seconds\n");
+            return false;
+        }
     }
 
     resyncThread = std::jthread([this, maxSnapshotRetries](std::stop_token stoken) {
@@ -200,8 +217,12 @@ bool FeedHandler::initialize(
             for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
                 printf("[%s] Fetching snapshot (attempt %d/%d)...\n", symbol.c_str(), attempt,
                        maxSnapshotRetries);
-                if (fetchAndApplySnapshot(symbol, *books->at(symbol))) { return true; }
-                if (attempt == maxSnapshotRetries) { break; }
+                if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
+                    return true;
+                }
+                if (attempt == maxSnapshotRetries) {
+                    break;
+                }
                 int delayMs = 1000 * attempt;
                 printf("[%s] Snapshot fetch failed, retrying in %d ms...\n", symbol.c_str(),
                        delayMs);
@@ -215,7 +236,9 @@ bool FeedHandler::initialize(
 
     bool allOk = true;
     for (auto& f : futures) {
-        if (!f.get()) { allOk = false; }
+        if (!f.get()) {
+            allOk = false;
+        }
     }
     return allOk;
 }
