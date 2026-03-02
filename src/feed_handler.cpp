@@ -2,20 +2,33 @@
 
 #include <ixwebsocket/IXHttpClient.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <future>
 #include <stop_token>
 #include <thread>
 
-bool FeedHandler::fetchAndApplySnapshot(OrderBook& orderBook) {
+namespace {
+constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
+}
+
+std::string FeedHandler::streamToSymbol(const std::string& stream) {
+    std::string sym = stream.substr(0, stream.find('@'));
+    std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
+    return sym;
+}
+
+bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook) {
     ix::HttpClient httpClient;
     auto args = std::make_shared<ix::HttpRequestArgs>();
-    args->connectTimeout = 5;    // seconds
-    args->transferTimeout = 30;  // seconds
-    auto response =
-        httpClient.get("https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=5000", args);
+    args->connectTimeout = 5;
+    args->transferTimeout = 30;
+    const std::string url = "https://api.binance.com/api/v3/depth?symbol=" + symbol + "&limit=5000";
+    auto response = httpClient.get(url, args);
     if (response->statusCode != 200) {
-        fprintf(stderr, "Failed to fetch snapshot: HTTP %d\n", response->statusCode);
+        fprintf(stderr, "[%s] Failed to fetch snapshot: HTTP %d\n", symbol.c_str(),
+                response->statusCode);
         return false;
     }
 
@@ -23,25 +36,23 @@ bool FeedHandler::fetchAndApplySnapshot(OrderBook& orderBook) {
         auto snapshot = nlohmann::json::parse(response->body);
         orderBook.applySnapshot(snapshot);
 
-        // Apply buffered messages that arrived while we were fetching
         std::lock_guard<std::mutex> lock(bufferMutex);
-        for (const auto& msg : bufferedMessages) {
+        for (const auto& msg : symbolBuffers[symbol]) {
             if (!orderBook.applyUpdate(msg)) {
-                fprintf(stderr, "Buffered message caused re-sync condition\n");
-                bufferedMessages.clear();
-                return false;  // Trigger retry
+                fprintf(stderr, "[%s] Buffered message caused re-sync condition\n", symbol.c_str());
+                symbolBuffers[symbol].clear();
+                return false;
             }
         }
-        bufferedMessages.clear();
+        symbolBuffers[symbol].clear();
         return true;
     } catch (const std::exception& e) {
-        fprintf(stderr, "Snapshot parse/apply error: %s\n", e.what());
+        fprintf(stderr, "[%s] Snapshot parse/apply error: %s\n", symbol.c_str(), e.what());
         return false;
     }
 }
 
-void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg, OrderBook& orderBook,
-                                  Metrics& metrics) {
+void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     if (msg->type == ix::WebSocketMessageType::Open) {
         printf("WebSocket connection opened.\n");
         std::lock_guard<std::mutex> lock(wsReadyMutex);
@@ -62,16 +73,29 @@ void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg, OrderBook&
     }
 
     try {
-        auto jsonMsg = nlohmann::json::parse(msg->str);
+        // Start timing before parse so we capture the full per-message cost.
+        const auto start = std::chrono::high_resolution_clock::now();
 
-        // Buffer until snapshot is applied
+        // Combo stream wraps each message: {"stream":"btcusdt@depth","data":{...}}
+        auto outer = nlohmann::json::parse(msg->str);
+        const std::string symbol = streamToSymbol(outer["stream"].get<std::string>());
+        const auto& jsonMsg = outer["data"];
+
+        auto booksIt = books->find(symbol);
+        auto metricsIt = metricsMap->find(symbol);
+        if (booksIt == books->end() || metricsIt == metricsMap->end()) {
+            return;  // unknown symbol
+        }
+        OrderBook& book = *booksIt->second;
+        Metrics& metrics = *metricsIt->second;
+
+        // Buffer until snapshot is applied for this symbol
         {
             std::lock_guard<std::mutex> lock(bufferMutex);
-            if (!orderBook.isSnapshotApplied()) {
-                printf(
-                    "Buffering message until snapshot is applied. Message event time: %lld\n",
-                    jsonMsg["E"].get<long long>());
-                bufferedMessages.push_back(std::move(jsonMsg));
+            if (!book.isSnapshotApplied()) {
+                if (symbolBuffers[symbol].size() < kMaxBufferedMsgsPerSymbol) {
+                    symbolBuffers[symbol].push_back(jsonMsg);
+                }
                 return;
             }
         }
@@ -83,18 +107,16 @@ void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg, OrderBook&
                             .count();
         metrics.lastEventLagMs.store(now - eventTime);
 
-        // Processing time metric
-        auto start = std::chrono::high_resolution_clock::now();
-        if (!orderBook.applyUpdate(jsonMsg)) {
-            printf("Restarting from scratch due to missed updates.\n");
-            orderBook.clear();  // sets snapshotApplied = false
+        if (!book.applyUpdate(jsonMsg)) {
+            printf("[%s] Restarting from scratch due to missed updates.\n", symbol.c_str());
+            book.clear();
             {
                 std::lock_guard<std::mutex> lock(bufferMutex);
-                bufferedMessages.clear();
+                symbolBuffers[symbol].clear();
             }
             {
                 std::lock_guard<std::mutex> lock(resyncMutex);
-                needsResync = true;
+                resyncQueue.push(symbol);
             }
             resyncCv.notify_one();
             return;
@@ -104,7 +126,6 @@ void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg, OrderBook&
             std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
         metrics.lastProcessingUs.store(processingUs);
 
-        // Update max processing time if needed
         long long prevMax = metrics.maxProcessingUs.load();
         while (processingUs > prevMax &&
                !metrics.maxProcessingUs.compare_exchange_weak(prevMax, processingUs)) {
@@ -116,73 +137,108 @@ void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg, OrderBook&
     }
 }
 
-void FeedHandler::runResyncWorker(OrderBook& orderBook, int maxSnapshotRetries,
-                                  std::stop_token stoken) {
+void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken) {
     std::stop_callback wake(stoken, [this] { resyncCv.notify_one(); });
     while (!stoken.stop_requested()) {
+        std::string symbol;
         {
             std::unique_lock<std::mutex> lock(resyncMutex);
-            resyncCv.wait(lock, [&] { return needsResync || stoken.stop_requested(); });
-            if (stoken.stop_requested()) { break; }
-            needsResync = false;
+            resyncCv.wait(lock, [&] { return !resyncQueue.empty() || stoken.stop_requested(); });
+            if (stoken.stop_requested()) {
+                break;
+            }
+            symbol = resyncQueue.front();
+            resyncQueue.pop();
         }
         for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-            printf("Re-sync snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
-            if (fetchAndApplySnapshot(orderBook)) { break; }
+            printf("[%s] Re-sync snapshot (attempt %d/%d)...\n", symbol.c_str(), attempt,
+                   maxSnapshotRetries);
+            if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
+                break;
+            }
             if (attempt < maxSnapshotRetries && !stoken.stop_requested()) {
                 int delayMs = 1000 * attempt;
-                printf("Re-sync failed, retrying in %d ms...\n", delayMs);
+                printf("[%s] Re-sync failed, retrying in %d ms...\n", symbol.c_str(), delayMs);
                 std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
             }
+        }
+        if (!books->at(symbol)->isSnapshotApplied()) {
+            fprintf(stderr,
+                    "[%s] Re-sync permanently failed after %d attempts. "
+                    "Symbol is inactive — restart to recover.\n",
+                    symbol.c_str(), maxSnapshotRetries);
         }
     }
 }
 
-bool FeedHandler::initialize(OrderBook& orderBook, ix::WebSocket& webSocket, Metrics& metrics,
-                             int maxSnapshotRetries) {
-    // Reset state for a fresh initialization
-    orderBook.clear();
+bool FeedHandler::initialize(
+    const std::vector<std::string>& symbols,
+    std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef, ix::WebSocket& webSocket,
+    std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
+    int maxSnapshotRetries) {
+    books = &booksRef;
+    metricsMap = &metricsMapRef;
+
+    for (auto& [sym, book] : *books) {
+        book->clear();
+    }
     {
         std::lock_guard<std::mutex> lock(bufferMutex);
-        bufferedMessages.clear();
+        symbolBuffers.clear();
     }
     {
         std::lock_guard<std::mutex> lock(wsReadyMutex);
         wsConnected = false;
     }
 
-    webSocket.setOnMessageCallback([&orderBook, &metrics, this,
-                                    &webSocket](const ix::WebSocketMessagePtr& msg) {
-        handleWsMessage(msg, orderBook, metrics);
-    });
+    webSocket.setOnMessageCallback(
+        [this](const ix::WebSocketMessagePtr& msg) { handleWsMessage(msg); });
 
     if (webSocket.getReadyState() == ix::ReadyState::Closed) {
         webSocket.start();
-
-        // Wait until WebSocket is connected before fetching the snapshot
         std::unique_lock<std::mutex> lock(wsReadyMutex);
-        wsReady.wait(lock, [this] { return wsConnected; });
-    }
-
-    // Start dedicated resync worker
-    resyncThread =
-        std::jthread([this, ob = &orderBook, maxSnapshotRetries](std::stop_token stoken) {
-            runResyncWorker(*ob, maxSnapshotRetries, stoken);
-        });
-
-    // Retry logic for snapshot fetching
-    for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-        printf("Fetching snapshot (attempt %d/%d)...\n", attempt, maxSnapshotRetries);
-        if (fetchAndApplySnapshot(orderBook)) {
-            return true;
-        }
-        if (attempt < maxSnapshotRetries) {
-            int delayMs = 1000 * attempt;  // simple linear back-off
-            printf("Snapshot fetch failed, retrying in %d ms...\n", delayMs);
-            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+        const bool connected =
+            wsReady.wait_for(lock, std::chrono::seconds(30), [this] { return wsConnected; });
+        if (!connected) {
+            fprintf(stderr, "WebSocket failed to connect within 30 seconds\n");
+            return false;
         }
     }
 
-    fprintf(stderr, "Failed to fetch snapshot after %d attempts.\n", maxSnapshotRetries);
-    return false;
+    resyncThread = std::jthread([this, maxSnapshotRetries](std::stop_token stoken) {
+        runResyncWorker(maxSnapshotRetries, stoken);
+    });
+
+    // Fetch all snapshots in parallel — each symbol gets its own thread.
+    std::vector<std::future<bool>> futures;
+    futures.reserve(symbols.size());
+    for (const auto& symbol : symbols) {
+        futures.push_back(std::async(std::launch::async, [this, symbol, maxSnapshotRetries]() {
+            for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+                printf("[%s] Fetching snapshot (attempt %d/%d)...\n", symbol.c_str(), attempt,
+                       maxSnapshotRetries);
+                if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
+                    return true;
+                }
+                if (attempt == maxSnapshotRetries) {
+                    break;
+                }
+                int delayMs = 1000 * attempt;
+                printf("[%s] Snapshot fetch failed, retrying in %d ms...\n", symbol.c_str(),
+                       delayMs);
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+            }
+            fprintf(stderr, "[%s] Failed to fetch snapshot after %d attempts.\n", symbol.c_str(),
+                    maxSnapshotRetries);
+            return false;
+        }));
+    }
+
+    bool allOk = true;
+    for (auto& f : futures) {
+        if (!f.get()) {
+            allOk = false;
+        }
+    }
+    return allOk;
 }
