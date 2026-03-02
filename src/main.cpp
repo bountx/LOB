@@ -48,12 +48,26 @@ int main(int argc, char* argv[]) {
     int updateIntervalMs = 100;
     if (config.contains("update_interval_ms")) {
         if (!config["update_interval_ms"].is_number_integer()) {
-            fprintf(stderr, "Config error: 'update_interval_ms' must be an integer (100 or 1000)\n");
+            fprintf(stderr,
+                    "Config error: 'update_interval_ms' must be an integer (100 or 1000)\n");
             return -1;
         }
         updateIntervalMs = config["update_interval_ms"].get<int>();
         if (updateIntervalMs != 100 && updateIntervalMs != 1000) {
             fprintf(stderr, "Config error: 'update_interval_ms' must be 100 or 1000\n");
+            return -1;
+        }
+    }
+
+    int snapshotDepth = 1000;
+    if (config.contains("snapshot_depth")) {
+        if (!config["snapshot_depth"].is_number_integer()) {
+            fprintf(stderr, "Config error: 'snapshot_depth' must be an integer\n");
+            return -1;
+        }
+        snapshotDepth = config["snapshot_depth"].get<int>();
+        if (snapshotDepth < 5 || snapshotDepth > 5000) {
+            fprintf(stderr, "Config error: 'snapshot_depth' must be between 5 and 5000\n");
             return -1;
         }
     }
@@ -120,7 +134,7 @@ int main(int argc, char* argv[]) {
     printf("\n");
 
     FeedHandler feedHandler;
-    if (!feedHandler.initialize(symbols, books, webSocket, metricsMap)) {
+    if (!feedHandler.initialize(symbols, books, webSocket, metricsMap, snapshotDepth)) {
         fprintf(stderr, "Failed to initialize FeedHandler.\n");
         return -1;
     }

@@ -1,5 +1,6 @@
 {
   "update_interval_ms": 100,
+  "snapshot_depth": 1000,
   "primary_symbol": "BTCUSDT",
   "symbols": [
     "BTCUSDT",

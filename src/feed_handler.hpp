@@ -21,7 +21,7 @@ public:
                     std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
                     ix::WebSocket& webSocket,
                     std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
-                    int maxSnapshotRetries = 5);
+                    int snapshotDepth = 1000, int maxSnapshotRetries = 5);
 
 private:
     std::unordered_map<std::string, std::unique_ptr<OrderBook>>* books = nullptr;
@@ -42,6 +42,8 @@ private:
 
     // "btcusdt@depth" → "BTCUSDT"
     static std::string streamToSymbol(const std::string& stream);
+
+    int snapshotDepth = 1000;
 
     bool fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook);
     void handleWsMessage(const ix::WebSocketMessagePtr& msg);
