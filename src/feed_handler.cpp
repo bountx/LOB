@@ -24,7 +24,8 @@ bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& or
     auto args = std::make_shared<ix::HttpRequestArgs>();
     args->connectTimeout = 5;
     args->transferTimeout = 30;
-    const std::string url = "https://api.binance.com/api/v3/depth?symbol=" + symbol + "&limit=5000";
+    const std::string url = "https://api.binance.com/api/v3/depth?symbol=" + symbol +
+                            "&limit=" + std::to_string(snapshotDepth);
     auto response = httpClient.get(url, args);
     if (response->statusCode != 200) {
         fprintf(stderr, "[%s] Failed to fetch snapshot: HTTP %d\n", symbol.c_str(),
@@ -174,10 +175,11 @@ void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken
 bool FeedHandler::initialize(
     const std::vector<std::string>& symbols,
     std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef, ix::WebSocket& webSocket,
-    std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
+    std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef, int snapshotDepthArg,
     int maxSnapshotRetries) {
     books = &booksRef;
     metricsMap = &metricsMapRef;
+    snapshotDepth = snapshotDepthArg;
 
     for (auto& [sym, book] : *books) {
         book->clear();
