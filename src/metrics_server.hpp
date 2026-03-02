@@ -15,11 +15,8 @@ class MetricsServer {
 public:
     MetricsServer(std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
                   std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
-                  std::string primarySymbol, int port = 9090)
-        : metricsMap(metricsMap),
-          books(books),
-          primarySymbol(std::move(primarySymbol)),
-          port(port) {}
+                  int port = 9090)
+        : metricsMap(metricsMap), books(books), port(port) {}
 
     ~MetricsServer() {
         svr.stop();
@@ -152,7 +149,6 @@ private:
 
     std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap;
     std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books;
-    std::string primarySymbol;
     int port;
     httplib::Server svr;
     std::thread thread;

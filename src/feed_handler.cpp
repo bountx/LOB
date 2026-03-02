@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <future>
 #include <stop_token>
 #include <thread>
 
@@ -191,22 +192,30 @@ bool FeedHandler::initialize(
         runResyncWorker(maxSnapshotRetries, stoken);
     });
 
+    // Fetch all snapshots in parallel — each symbol gets its own thread.
+    std::vector<std::future<bool>> futures;
+    futures.reserve(symbols.size());
     for (const auto& symbol : symbols) {
-        for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-            printf("[%s] Fetching snapshot (attempt %d/%d)...\n", symbol.c_str(), attempt,
-                   maxSnapshotRetries);
-            if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
-                break;
+        futures.push_back(std::async(std::launch::async, [this, symbol, maxSnapshotRetries]() {
+            for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+                printf("[%s] Fetching snapshot (attempt %d/%d)...\n", symbol.c_str(), attempt,
+                       maxSnapshotRetries);
+                if (fetchAndApplySnapshot(symbol, *books->at(symbol))) { return true; }
+                if (attempt == maxSnapshotRetries) { break; }
+                int delayMs = 1000 * attempt;
+                printf("[%s] Snapshot fetch failed, retrying in %d ms...\n", symbol.c_str(),
+                       delayMs);
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
             }
-            if (attempt == maxSnapshotRetries) {
-                fprintf(stderr, "[%s] Failed to fetch snapshot after %d attempts.\n",
-                        symbol.c_str(), maxSnapshotRetries);
-                return false;
-            }
-            int delayMs = 1000 * attempt;
-            printf("[%s] Snapshot fetch failed, retrying in %d ms...\n", symbol.c_str(), delayMs);
-            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-        }
+            fprintf(stderr, "[%s] Failed to fetch snapshot after %d attempts.\n", symbol.c_str(),
+                    maxSnapshotRetries);
+            return false;
+        }));
     }
-    return true;
+
+    bool allOk = true;
+    for (auto& f : futures) {
+        if (!f.get()) { allOk = false; }
+    }
+    return allOk;
 }

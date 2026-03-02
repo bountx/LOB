@@ -45,8 +45,24 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    if (!config.contains("symbols") || !config["symbols"].is_array() ||
+        config["symbols"].empty()) {
+        fprintf(stderr, "Config error: 'symbols' must be a non-empty array\n");
+        return -1;
+    }
+    if (!config.contains("primary_symbol") || !config["primary_symbol"].is_string()) {
+        fprintf(stderr, "Config error: 'primary_symbol' must be a string\n");
+        return -1;
+    }
+
     const auto symbols = config["symbols"].get<std::vector<std::string>>();
     const auto primarySymbol = config["primary_symbol"].get<std::string>();
+
+    if (std::find(symbols.begin(), symbols.end(), primarySymbol) == symbols.end()) {
+        fprintf(stderr, "Config error: primary_symbol '%s' is not in symbols list\n",
+                primarySymbol.c_str());
+        return -1;
+    }
 
     // Build combo stream URL: wss://.../stream?streams=btcusdt@depth/ethusdt@depth/...
     std::string url = "wss://stream.binance.com:9443/stream?streams=";
@@ -69,7 +85,7 @@ int main(int argc, char* argv[]) {
     ix::WebSocket webSocket;
     webSocket.setUrl(url);
 
-    MetricsServer metricsServer(metricsMap, books, primarySymbol);
+    MetricsServer metricsServer(metricsMap, books);
     if (!metricsServer.start()) {
         fprintf(stderr, "Failed to bind metrics server on port 9090.\n");
         return -1;
