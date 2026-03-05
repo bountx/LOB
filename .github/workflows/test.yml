@@ -28,14 +28,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('tests/vcpkg.json') }}
 
       - name: Configure CMake
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTS=ON \
+            -DBUILD_TESTS_ONLY=ON \
             -DENABLE_COVERAGE=ON \
+            -DVCPKG_MANIFEST_DIR="${GITHUB_WORKSPACE}/tests" \
             -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
 
       - name: Build tests
