@@ -31,7 +31,7 @@ void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
         bids[price] = quantity;
     }
     snapshotApplied.store(true);
-    printf("Snapshot applied successfully.\n");
+    printf("snapshot applied\n");
 }
 
 bool OrderBook::applyUpdate(const nlohmann::json& update) {
@@ -40,12 +40,12 @@ bool OrderBook::applyUpdate(const nlohmann::json& update) {
     long long u = update["u"].get<long long>();  // last update ID in the stream
     if (u <= lastUpdateId) {
         // Stale update, ignore
-        printf("Stale update received, ignoring.\n");
+        printf("stale update, skipping\n");
         return true;
     }
     if (U > lastUpdateId + 1) {
         // Missed updates, restart from scratch
-        printf("Missed updates, restarting from scratch.\n");
+        printf("gap in update IDs, triggering resync\n");
         return false;
     }
     for (const auto& ask : update["a"]) {
