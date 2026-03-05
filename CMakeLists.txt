@@ -28,3 +28,36 @@ target_link_libraries(lob_app PRIVATE
     nlohmann_json::nlohmann_json
     httplib::httplib
 )
+
+# ─── Tests ────────────────────────────────────────────────────────────────────
+
+option(BUILD_TESTS "Build unit tests" OFF)
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+
+if(BUILD_TESTS)
+    enable_testing()
+    find_package(GTest CONFIG REQUIRED)
+
+    add_executable(lob_tests
+        tests/test_order_book.cpp
+        tests/test_decimal.cpp
+        tests/test_safe_arithmetic.cpp
+        src/order_book.cpp
+    )
+
+    target_include_directories(lob_tests PRIVATE src)
+
+    target_link_libraries(lob_tests PRIVATE
+        Threads::Threads
+        nlohmann_json::nlohmann_json
+        GTest::gtest_main
+    )
+
+    if(ENABLE_COVERAGE)
+        target_compile_options(lob_tests PRIVATE --coverage -O0)
+        target_link_options(lob_tests PRIVATE --coverage)
+    endif()
+
+    include(GoogleTest)
+    gtest_discover_tests(lob_tests)
+endif()
