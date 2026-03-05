@@ -17,7 +17,14 @@ jobs:
       - name: Install vcpkg
         run: |
           git clone https://github.com/microsoft/vcpkg.git
+          git -C vcpkg checkout ffc071e0c08432c60c9b64f00334c0227667931b
           ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Cache vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Configure CMake
         run: |

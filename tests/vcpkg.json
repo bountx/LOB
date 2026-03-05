@@ -1,0 +1,9 @@
+{
+  "name": "lob-tests",
+  "version": "0.1.0",
+  "builtin-baseline": "ffc071e0c08432c60c9b64f00334c0227667931b",
+  "dependencies": [
+    "nlohmann-json",
+    "gtest"
+  ]
+}
