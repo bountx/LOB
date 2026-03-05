@@ -1,0 +1,62 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build lcov
+
+      - name: Install vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          git -C vcpkg checkout ffc071e0c08432c60c9b64f00334c0227667931b
+          ./vcpkg/bootstrap-vcpkg.sh
+
+      - name: Cache vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTS=ON \
+            -DENABLE_COVERAGE=ON \
+            -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build tests
+        run: cmake --build build --target lob_tests -j$(nproc)
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Generate coverage report
+        run: |
+          lcov --capture --directory build \
+            --output-file coverage.info \
+            --ignore-errors mismatch
+          lcov --remove coverage.info \
+            '/usr/*' '*/vcpkg/*' '*/tests/*' \
+            --output-file coverage.info \
+            --ignore-errors unused
+          lcov --list coverage.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.info
+          fail_ci_if_error: false
