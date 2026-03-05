@@ -13,9 +13,7 @@ TEST(SafeMultiply, NormalPositiveCases) {
     EXPECT_EQ(safeMultiply(100'000'000LL, 100'000LL), 10'000'000'000'000LL);
 }
 
-TEST(SafeMultiply, NegativeTimesPositive) {
-    EXPECT_EQ(safeMultiply(-5LL, 3LL), -15LL);
-}
+TEST(SafeMultiply, NegativeTimesPositive) { EXPECT_EQ(safeMultiply(-5LL, 3LL), -15LL); }
 
 TEST(SafeMultiply, PositiveOverflowThrows) {
     long long big = std::numeric_limits<long long>::max();
@@ -25,6 +23,12 @@ TEST(SafeMultiply, PositiveOverflowThrows) {
 TEST(SafeMultiply, NegativeUnderflowThrows) {
     long long min = std::numeric_limits<long long>::lowest();
     EXPECT_THROW(safeMultiply(min, 2LL), std::overflow_error);
+}
+
+TEST(SafeMultiply, MinTimesMinusOneThrows) {
+    // LLONG_MIN * -1 = 2^63 which overflows long long max (2^63 - 1)
+    long long min = std::numeric_limits<long long>::lowest();
+    EXPECT_THROW(safeMultiply(min, -1LL), std::overflow_error);
 }
 
 // ─── safeAdd ──────────────────────────────────────────────────────────────────

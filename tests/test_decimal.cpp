@@ -16,18 +16,14 @@ TEST(ParseDecimal, IntegerWithoutDot) {
 
 // ─── Decimal inputs ───────────────────────────────────────────────────────────
 
-TEST(ParseDecimal, HalfUnit) {
-    EXPECT_EQ(parseDecimal("0.5"), SCALE / 2);
-}
+TEST(ParseDecimal, HalfUnit) { EXPECT_EQ(parseDecimal("0.5"), SCALE / 2); }
 
 TEST(ParseDecimal, TrailingZeroesAreIgnored) {
     EXPECT_EQ(parseDecimal("1.10"), 110'000'000LL);
     EXPECT_EQ(parseDecimal("50000.00"), 50000LL * SCALE);
 }
 
-TEST(ParseDecimal, FullEightDecimalPlaces) {
-    EXPECT_EQ(parseDecimal("0.12345678"), 12'345'678LL);
-}
+TEST(ParseDecimal, FullEightDecimalPlaces) { EXPECT_EQ(parseDecimal("0.12345678"), 12'345'678LL); }
 
 TEST(ParseDecimal, ShortDecimalIsPaddedToEightPlaces) {
     EXPECT_EQ(parseDecimal("0.1"), 10'000'000LL);
@@ -51,9 +47,7 @@ TEST(ParseDecimal, NegativeValue) {
 
 // ─── Error cases ──────────────────────────────────────────────────────────────
 
-TEST(ParseDecimal, BareDecimalPointThrows) {
-    EXPECT_THROW(parseDecimal("."), std::runtime_error);
-}
+TEST(ParseDecimal, BareDecimalPointThrows) { EXPECT_THROW(parseDecimal("."), std::runtime_error); }
 
 TEST(ParseDecimal, TooManyFractionalDigitsThrows) {
     EXPECT_THROW(parseDecimal("1.123456789"), std::runtime_error);
