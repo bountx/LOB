@@ -17,6 +17,9 @@
 
 class FeedHandler {
 public:
+    // Connects the WebSocket, starts the resync worker, and fetches initial snapshots for all
+    // symbols. Snapshot requests are staggered to stay within Binance REST rate limits.
+    // Returns false if the WebSocket doesn't connect or any snapshot can't be fetched.
     bool initialize(const std::vector<std::string>& symbols,
                     std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
                     ix::WebSocket& webSocket,
@@ -45,7 +48,14 @@ private:
 
     int snapshotDepth = 1000;
 
+    // Fetches a depth snapshot from the Binance REST API and applies it to the order book.
+    // On 429 (rate limited) or 418 (IP banned), sleeps before returning false so the caller
+    // doesn't immediately retry and dig the hole deeper.
     bool fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook);
+
     void handleWsMessage(const ix::WebSocketMessagePtr& msg);
+
+    // Pulls symbols off the resync queue and re-fetches their snapshots, one at a time.
+    // Runs on its own thread until stoken fires.
     void runResyncWorker(int maxSnapshotRetries, std::stop_token stoken);
 };

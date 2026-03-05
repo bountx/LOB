@@ -36,12 +36,12 @@ int main(int argc, char* argv[]) {
     try {
         std::ifstream f(configPath);
         if (!f.is_open()) {
-            fprintf(stderr, "Cannot open config file: %s\n", configPath);
+            fprintf(stderr, "can't open config: %s\n", configPath);
             return -1;
         }
         config = nlohmann::json::parse(f);
     } catch (const std::exception& e) {
-        fprintf(stderr, "Config parse error: %s\n", e.what());
+        fprintf(stderr, "config parse error: %s\n", e.what());
         return -1;
     }
 
@@ -49,12 +49,12 @@ int main(int argc, char* argv[]) {
     if (config.contains("update_interval_ms")) {
         if (!config["update_interval_ms"].is_number_integer()) {
             fprintf(stderr,
-                    "Config error: 'update_interval_ms' must be an integer (100 or 1000)\n");
+                    "config error: 'update_interval_ms' must be an integer (100 or 1000)\n");
             return -1;
         }
         updateIntervalMs = config["update_interval_ms"].get<int>();
         if (updateIntervalMs != 100 && updateIntervalMs != 1000) {
-            fprintf(stderr, "Config error: 'update_interval_ms' must be 100 or 1000\n");
+            fprintf(stderr, "config error: 'update_interval_ms' must be 100 or 1000\n");
             return -1;
         }
     }
@@ -62,22 +62,22 @@ int main(int argc, char* argv[]) {
     int snapshotDepth = 1000;
     if (config.contains("snapshot_depth")) {
         if (!config["snapshot_depth"].is_number_integer()) {
-            fprintf(stderr, "Config error: 'snapshot_depth' must be an integer\n");
+            fprintf(stderr, "config error: 'snapshot_depth' must be an integer\n");
             return -1;
         }
         snapshotDepth = config["snapshot_depth"].get<int>();
         if (snapshotDepth < 5 || snapshotDepth > 5000) {
-            fprintf(stderr, "Config error: 'snapshot_depth' must be between 5 and 5000\n");
+            fprintf(stderr, "config error: 'snapshot_depth' must be between 5 and 5000\n");
             return -1;
         }
     }
 
     if (!config.contains("symbols") || !config["symbols"].is_array() || config["symbols"].empty()) {
-        fprintf(stderr, "Config error: 'symbols' must be a non-empty array\n");
+        fprintf(stderr, "config error: 'symbols' must be a non-empty array\n");
         return -1;
     }
     if (!config.contains("primary_symbol") || !config["primary_symbol"].is_string()) {
-        fprintf(stderr, "Config error: 'primary_symbol' must be a string\n");
+        fprintf(stderr, "config error: 'primary_symbol' must be a string\n");
         return -1;
     }
 
@@ -86,7 +86,7 @@ int main(int argc, char* argv[]) {
     std::string urlStreams;
     for (const auto& entry : config["symbols"]) {
         if (!entry.is_string()) {
-            fprintf(stderr, "Config error: every entry in 'symbols' must be a string\n");
+            fprintf(stderr, "config error: every entry in 'symbols' must be a string\n");
             return -1;
         }
         std::string sym = entry.get<std::string>();
@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
     std::transform(primarySymbol.begin(), primarySymbol.end(), primarySymbol.begin(), ::toupper);
 
     if (std::find(symbols.begin(), symbols.end(), primarySymbol) == symbols.end()) {
-        fprintf(stderr, "Config error: primary_symbol '%s' is not in symbols list\n",
+        fprintf(stderr, "config error: primary_symbol '%s' is not in symbols list\n",
                 primarySymbol.c_str());
         return -1;
     }
@@ -123,11 +123,11 @@ int main(int argc, char* argv[]) {
 
     MetricsServer metricsServer(metricsMap, books);
     if (!metricsServer.start()) {
-        fprintf(stderr, "Failed to bind metrics server on port 9090.\n");
+        fprintf(stderr, "couldn't bind metrics server on port 9090\n");
         return -1;
     }
-    printf("Metrics available at http://0.0.0.0:9090/metrics\n");
-    printf("Subscribing to %zu symbol(s): ", symbols.size());
+    printf("metrics at http://0.0.0.0:9090/metrics\n");
+    printf("watching %zu symbol(s): ", symbols.size());
     for (const auto& sym : symbols) {
         printf("%s ", sym.c_str());
     }
@@ -135,7 +135,7 @@ int main(int argc, char* argv[]) {
 
     FeedHandler feedHandler;
     if (!feedHandler.initialize(symbols, books, webSocket, metricsMap, snapshotDepth)) {
-        fprintf(stderr, "Failed to initialize FeedHandler.\n");
+        fprintf(stderr, "failed to start feed handler\n");
         return -1;
     }
 
