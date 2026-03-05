@@ -31,10 +31,12 @@ bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& or
         int retryAfterSec = 60;
         auto it = response->headers.find("Retry-After");
         if (it != response->headers.end()) {
-            try { retryAfterSec = std::stoi(it->second); } catch (...) {}
+            try {
+                retryAfterSec = std::stoi(it->second);
+            } catch (...) {
+            }
         }
-        fprintf(stderr, "[%s] got 429, waiting %ds before retry\n", symbol.c_str(),
-                retryAfterSec);
+        fprintf(stderr, "[%s] got 429, waiting %ds before retry\n", symbol.c_str(), retryAfterSec);
         std::this_thread::sleep_for(std::chrono::seconds(retryAfterSec));
         return false;
     }
@@ -168,8 +170,7 @@ void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken
             resyncQueue.pop();
         }
         for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-            printf("[%s] resyncing (attempt %d/%d)\n", symbol.c_str(), attempt,
-                   maxSnapshotRetries);
+            printf("[%s] resyncing (attempt %d/%d)\n", symbol.c_str(), attempt, maxSnapshotRetries);
             if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
                 break;
             }
@@ -234,7 +235,8 @@ bool FeedHandler::initialize(
 
     // Don't fetch all snapshots at once. 30 parallel requests = 300 weight in one burst,
     // which is fine in isolation, but Docker restarts compound this fast enough to earn a 429
-    // or 418 ban. A 300ms gap between launches keeps only a handful of requests in-flight at a time.
+    // or 418 ban. A 300ms gap between launches keeps only a handful of requests in-flight at a
+    // time.
     std::vector<std::future<bool>> futures;
     futures.reserve(symbols.size());
     for (size_t i = 0; i < symbols.size(); ++i) {
@@ -253,8 +255,7 @@ bool FeedHandler::initialize(
                     break;
                 }
                 int delayMs = 1000 * attempt;
-                printf("[%s] snapshot fetch failed, retrying in %dms\n", symbol.c_str(),
-                       delayMs);
+                printf("[%s] snapshot fetch failed, retrying in %dms\n", symbol.c_str(), delayMs);
                 std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
             }
             fprintf(stderr, "[%s] snapshot fetch gave up after %d attempts\n", symbol.c_str(),
