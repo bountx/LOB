@@ -1,7 +1,7 @@
 # LOB — Multi-Exchange Order Book Server
 
 [![Tests](https://github.com/bountx/LOB/actions/workflows/test.yml/badge.svg)](https://github.com/bountx/LOB/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/bountx/LOB/graph/badge.svg)](https://codecov.io/gh/bountx/LOB)
+[![codecov](https://codecov.io/gh/bountx/LOB/graph/badge.svg?token=DHZNG5VRX6)](https://codecov.io/gh/bountx/LOB)
 
 A self-hosted WebSocket server that connects to multiple crypto exchanges, maintains live limit order books, and re-broadcasts normalized data to any number of subscribers. Run it on a $6 VPS and point your trading scripts, dashboards, or ML pipelines at it.
 
