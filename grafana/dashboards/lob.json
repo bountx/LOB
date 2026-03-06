@@ -15,11 +15,26 @@
   "templating": {
     "list": [
       {
+        "name": "exchange",
+        "label": "Exchange",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(lob_messages_total, exchange)",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": true,
+        "allValue": ".*",
+        "sort": 1,
+        "hide": 0,
+        "options": [],
+        "current": {}
+      },
+      {
         "name": "symbol",
         "label": "Symbol",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(lob_messages_total, symbol)",
+        "query": "label_values(lob_messages_total{exchange=~\"$exchange\"}, symbol)",
         "refresh": 1,
         "multi": false,
         "includeAll": false,
@@ -45,7 +60,7 @@
           "refId": "A"
         },
         {
-          "expr": "rate(lob_messages_total{symbol=\"$symbol\"}[1m])",
+          "expr": "rate(lob_messages_total{exchange=~\"$exchange\",symbol=\"$symbol\"}[1m])",
           "legendFormat": "{{symbol}} msg/s",
           "refId": "B"
         }
@@ -66,19 +81,19 @@
     {
       "id": 2,
       "title": "Event Lag",
-      "description": "Worst-case lag across all symbols, with selected symbol overlaid for comparison",
+      "description": "Worst-case lag per exchange, with selected symbol overlaid for comparison",
       "type": "timeseries",
       "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "max(lob_event_lag_milliseconds)",
-          "legendFormat": "worst lag ms (all)",
+          "expr": "max by(exchange) (lob_event_lag_milliseconds)",
+          "legendFormat": "{{exchange}} worst lag ms",
           "refId": "A"
         },
         {
-          "expr": "lob_event_lag_milliseconds{symbol=\"$symbol\"}",
-          "legendFormat": "{{symbol}} lag ms",
+          "expr": "lob_event_lag_milliseconds{exchange=~\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "{{exchange}} {{symbol}} lag ms",
           "refId": "B"
         }
       ],
@@ -122,7 +137,7 @@
           "refId": "B"
         },
         {
-          "expr": "lob_processing_time_microseconds{symbol=\"$symbol\"}",
+          "expr": "lob_processing_time_microseconds{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "{{symbol}} µs",
           "refId": "C"
         }
@@ -157,12 +172,12 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_best_ask_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_ask_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Ask",
           "refId": "A"
         },
         {
-          "expr": "lob_orderbook_best_bid_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_bid_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Bid",
           "refId": "B"
         }
@@ -190,7 +205,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_spread_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_spread_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "spread USD",
           "refId": "A"
         }
@@ -218,12 +233,12 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_asks_count{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_asks_count{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Asks",
           "refId": "A"
         },
         {
-          "expr": "lob_orderbook_bids_count{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_bids_count{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Bids",
           "refId": "B"
         }
@@ -255,8 +270,8 @@
           "refId": "A"
         },
         {
-          "expr": "max(lob_event_lag_milliseconds)",
-          "legendFormat": "Worst Lag (ms)",
+          "expr": "max by(exchange) (lob_event_lag_milliseconds)",
+          "legendFormat": "Event Lag (ms)",
           "refId": "B"
         },
         {
@@ -265,17 +280,17 @@
           "refId": "C"
         },
         {
-          "expr": "lob_orderbook_best_ask_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_ask_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Ask",
           "refId": "D"
         },
         {
-          "expr": "lob_orderbook_best_bid_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_bid_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Bid",
           "refId": "E"
         },
         {
-          "expr": "lob_orderbook_spread_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_spread_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Spread",
           "refId": "F"
         }

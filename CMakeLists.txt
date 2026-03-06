@@ -46,6 +46,8 @@ if(BUILD_TESTS)
         tests/test_order_book.cpp
         tests/test_decimal.cpp
         tests/test_safe_arithmetic.cpp
+        tests/test_binance_utils.cpp
+        tests/test_prometheus_format.cpp
         src/order_book.cpp
     )
 

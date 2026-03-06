@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <future>
+#include <stdexcept>
 #include <stop_token>
 #include <thread>
 
@@ -13,13 +14,60 @@ namespace {
 constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
 }
 
-std::string FeedHandler::streamToSymbol(const std::string& stream) {
-    std::string sym = stream.substr(0, stream.find('@'));
-    std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
-    return sym;
+/**
+ * @brief Construct a BinanceAdapter configured for the specified depth update interval.
+ *
+ * Initializes the adapter's update interval used when subscribing to Binance depth streams.
+ *
+ * @param updateIntervalMs Milliseconds between depth update snapshots; must be either 100 or 1000.
+ * @throws std::invalid_argument if `updateIntervalMs` is not 100 or 1000.
+ */
+BinanceAdapter::BinanceAdapter(int updateIntervalMs) : updateIntervalMs(updateIntervalMs) {
+    if (updateIntervalMs != 100 && updateIntervalMs != 1000) {
+        throw std::invalid_argument("BinanceAdapter: updateIntervalMs must be 100 or 1000, got " +
+                                    std::to_string(updateIntervalMs));
+    }
 }
 
-bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook) {
+/**
+ * @brief Cleans up the adapter, ensuring background workers and connections are stopped.
+ *
+ * Ensures the resync worker is requested to stop, the resync condition variable is
+ * notified, the resync thread is joined/reset, and the WebSocket client is stopped.
+ */
+BinanceAdapter::~BinanceAdapter() { stop(); }
+
+/**
+ * @brief Stops background processing and shuts down the WebSocket connection.
+ *
+ * Requests cancellation of the resync worker, wakes the resync condition variable,
+ * joins and destroys the resync thread, and stops the WebSocket client.
+ */
+void BinanceAdapter::stop() {
+    resyncThread.request_stop();
+    resyncCv.notify_one();
+    resyncThread = {};  // join + destroy
+    webSocket.stop();
+}
+
+/**
+ * @brief Fetches a depth snapshot for a symbol from Binance and applies it to the given order book.
+ *
+ * Attempts to download the REST order-book snapshot for `symbol`, apply it to `orderBook`, and then
+ * replay any pre-snapshot buffered websocket updates for that symbol atomically. If the HTTP
+ * response indicates rate limiting or an IP ban the function will wait according to the server's
+ * guidance (or a default) and return `false`.
+ *
+ * @param symbol Symbol identifier used in the Binance REST request (e.g., "BTCUSDT").
+ * @param orderBook OrderBook instance to receive the applied snapshot and subsequent replayed
+ * updates.
+ * @param stoken Stop token used to interrupt any waits caused by rate limiting or IP bans, allowing
+ * for graceful shutdown.
+ * @return `true` if the snapshot was applied and all buffered updates were successfully replayed;
+ * `false` otherwise.
+ */
+bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook,
+                                           std::stop_token stoken) {
     ix::HttpClient httpClient;
     auto args = std::make_shared<ix::HttpRequestArgs>();
     args->connectTimeout = 5;
@@ -37,12 +85,14 @@ bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& or
             }
         }
         fprintf(stderr, "[%s] got 429, waiting %ds before retry\n", symbol.c_str(), retryAfterSec);
-        std::this_thread::sleep_for(std::chrono::seconds(retryAfterSec));
+        std::unique_lock<std::mutex> lock(resyncMutex);
+        resyncCv.wait_for(lock, stoken, std::chrono::seconds(retryAfterSec), [] { return false; });
         return false;
     }
     if (response->statusCode == 418) {
         fprintf(stderr, "[%s] IP banned (418), waiting 120s\n", symbol.c_str());
-        std::this_thread::sleep_for(std::chrono::seconds(120));
+        std::unique_lock<std::mutex> lock(resyncMutex);
+        resyncCv.wait_for(lock, stoken, std::chrono::seconds(120), [] { return false; });
         return false;
     }
     if (response->statusCode != 200) {
@@ -53,9 +103,12 @@ bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& or
 
     try {
         auto snapshot = nlohmann::json::parse(response->body);
-        orderBook.applySnapshot(snapshot);
 
+        // Hold bufferMutex across applySnapshot + buffer replay so that
+        // handleWsMessage cannot observe isSnapshotApplied()==true and apply
+        // a live update while we are still draining the pre-snapshot buffer.
         std::lock_guard<std::mutex> lock(bufferMutex);
+        orderBook.applySnapshot(snapshot);
         for (const auto& msg : symbolBuffers[symbol]) {
             if (!orderBook.applyUpdate(msg)) {
                 fprintf(stderr, "[%s] buffered message out of order, resyncing\n", symbol.c_str());
@@ -71,7 +124,19 @@ bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& or
     }
 }
 
-void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
+/**
+ * @brief Process an incoming WebSocket event from Binance and update state or metrics accordingly.
+ *
+ * Handles connection lifecycle events (Open/Close/Error) and parses combo-stream messages for
+ * order-book updates. While a symbol's initial snapshot is missing, messages are buffered. After
+ * snapshot application, updates are applied to the corresponding OrderBook; on update failures the
+ * symbol is scheduled for resynchronization and its buffer is cleared. Processing time and event
+ * lag are recorded in the associated Metrics.
+ *
+ * @param msg Pointer to the WebSocket message; for data messages it is expected to contain a
+ * Binance combo stream JSON object with fields `"stream"` and `"data"`.
+ */
+void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     if (msg->type == ix::WebSocketMessageType::Open) {
         printf("connected\n");
         std::lock_guard<std::mutex> lock(wsReadyMutex);
@@ -156,14 +221,26 @@ void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     }
 }
 
-void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken) {
-    std::stop_callback wake(stoken, [this] { resyncCv.notify_one(); });
-    while (!stoken.stop_requested()) {
+/**
+ * @brief Background worker that processes symbols needing resynchronization.
+ *
+ * Waits for symbols enqueued for resync, then attempts up to `maxSnapshotRetries`
+ * to fetch and apply a fresh snapshot for each symbol. Retries use an increasing
+ * delay (1000ms * attempt) between attempts, and a 500ms pause is added after
+ * each symbol to avoid bursting REST requests. The worker wakes and exits when
+ * `stoken` requests stop.
+ *
+ * @param maxSnapshotRetries Maximum number of snapshot fetch attempts per symbol.
+ * @param stoken Stop token used to interrupt waiting, wake the worker, and
+ *               request graceful shutdown.
+ */
+void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken) {
+    while (true) {
         std::string symbol;
         {
             std::unique_lock<std::mutex> lock(resyncMutex);
-            resyncCv.wait(lock, [&] { return !resyncQueue.empty() || stoken.stop_requested(); });
-            if (stoken.stop_requested()) {
+            // wait() with stop_token: returns false immediately if stop is requested.
+            if (!resyncCv.wait(lock, stoken, [&] { return !resyncQueue.empty(); })) {
                 break;
             }
             symbol = resyncQueue.front();
@@ -171,13 +248,21 @@ void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken
         }
         for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
             printf("[%s] resyncing (attempt %d/%d)\n", symbol.c_str(), attempt, maxSnapshotRetries);
-            if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
+            if (fetchAndApplySnapshot(symbol, *books->at(symbol), stoken)) {
                 break;
             }
-            if (attempt < maxSnapshotRetries && !stoken.stop_requested()) {
+            if (stoken.stop_requested()) {
+                return;
+            }
+            if (attempt < maxSnapshotRetries) {
                 int delayMs = 1000 * attempt;
                 printf("[%s] resync failed, retrying in %dms\n", symbol.c_str(), delayMs);
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                std::unique_lock<std::mutex> lock(resyncMutex);
+                resyncCv.wait_for(lock, stoken, std::chrono::milliseconds(delayMs),
+                                  [] { return false; });
+                if (stoken.stop_requested()) {
+                    return;
+                }
             }
         }
         if (!books->at(symbol)->isSnapshotApplied()) {
@@ -188,17 +273,48 @@ void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken
         // Small gap before picking up the next symbol. When several symbols fall out of sync
         // at once (common after a network hiccup), they all land in the queue together, and
         // processing them without any delay would fire REST requests back-to-back.
-        if (!stoken.stop_requested()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        {
+            std::unique_lock<std::mutex> lock(resyncMutex);
+            resyncCv.wait_for(lock, stoken, std::chrono::milliseconds(500), [] { return false; });
+        }
+        if (stoken.stop_requested()) {
+            return;
         }
     }
 }
 
-bool FeedHandler::initialize(
-    const std::vector<std::string>& symbols,
-    std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef, ix::WebSocket& webSocket,
-    std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef, int snapshotDepthArg,
-    int maxSnapshotRetries) {
+/**
+ * @brief Initialize the adapter for a set of trading symbols, establish streaming, start
+ * the resync worker, and load initial order book snapshots.
+ *
+ * Validates that each symbol has an associated OrderBook and Metrics, configures internal
+ * references and snapshot depth, opens the Binance combined WebSocket stream for the symbols,
+ * starts the background resync thread, and concurrently fetches and applies initial REST
+ * snapshots for each symbol with retry/backoff and a staggered launch to avoid rate limits.
+ *
+ * @param symbols List of symbol names to subscribe and initialize (e.g., "BTCUSDT").
+ * @param booksRef Map of symbol -> owned OrderBook instances; must contain every symbol.
+ * @param metricsMapRef Map of symbol -> owned Metrics instances; must contain every symbol.
+ * @param snapshotDepthArg Depth parameter used when requesting REST order book snapshots.
+ * @param maxSnapshotRetries Maximum number of attempts per-symbol to fetch and apply the initial
+ * snapshot.
+ * @return true if the adapter connected and all initial snapshots were successfully applied;
+ * `false` if validation failed, the WebSocket failed to connect, or any symbol failed to obtain a
+ * snapshot.
+ */
+bool BinanceAdapter::start(const std::vector<std::string>& symbols,
+                           std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,
+                           std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
+                           int snapshotDepthArg, int maxSnapshotRetries) {
+    for (const auto& sym : symbols) {
+        if (booksRef.find(sym) == booksRef.end() ||
+            metricsMapRef.find(sym) == metricsMapRef.end()) {
+            fprintf(stderr, "BinanceAdapter::start: symbol '%s' missing from books or metricsMap\n",
+                    sym.c_str());
+            return false;
+        }
+    }
+
     books = &booksRef;
     metricsMap = &metricsMapRef;
     snapshotDepth = snapshotDepthArg;
@@ -215,6 +331,16 @@ bool FeedHandler::initialize(
         wsConnected = false;
     }
 
+    // Build the combo stream URL from the symbol list.
+    std::string urlStreams;
+    for (const auto& sym : symbols) {
+        std::string lower = sym;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (!urlStreams.empty()) urlStreams += "/";
+        urlStreams += lower + "@depth@" + std::to_string(updateIntervalMs) + "ms";
+    }
+    webSocket.setUrl("wss://stream.binance.com:9443/stream?streams=" + urlStreams);
+
     webSocket.setOnMessageCallback(
         [this](const ix::WebSocketMessagePtr& msg) { handleWsMessage(msg); });
 
@@ -225,6 +351,8 @@ bool FeedHandler::initialize(
             wsReady.wait_for(lock, std::chrono::seconds(30), [this] { return wsConnected; });
         if (!connected) {
             fprintf(stderr, "WebSocket didn't connect within 30s\n");
+            lock.unlock();
+            webSocket.stop();
             return false;
         }
     }
@@ -237,6 +365,7 @@ bool FeedHandler::initialize(
     // which is fine in isolation, but Docker restarts compound this fast enough to earn a 429
     // or 418 ban. A 300ms gap between launches keeps only a handful of requests in-flight at a
     // time.
+    std::stop_token startStoken = resyncThread.get_stop_token();
     std::vector<std::future<bool>> futures;
     futures.reserve(symbols.size());
     for (size_t i = 0; i < symbols.size(); ++i) {
@@ -244,19 +373,22 @@ bool FeedHandler::initialize(
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
         const auto& symbol = symbols[i];
-        futures.push_back(std::async(std::launch::async, [this, symbol, maxSnapshotRetries]() {
+        futures.push_back(std::async(std::launch::async, [this, symbol, maxSnapshotRetries,
+                                                          startStoken]() {
             for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
                 printf("[%s] fetching snapshot (attempt %d/%d)\n", symbol.c_str(), attempt,
                        maxSnapshotRetries);
-                if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
+                if (fetchAndApplySnapshot(symbol, *books->at(symbol), startStoken)) {
                     return true;
                 }
-                if (attempt == maxSnapshotRetries) {
+                if (startStoken.stop_requested() || attempt == maxSnapshotRetries) {
                     break;
                 }
                 int delayMs = 1000 * attempt;
                 printf("[%s] snapshot fetch failed, retrying in %dms\n", symbol.c_str(), delayMs);
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                std::unique_lock<std::mutex> lock(resyncMutex);
+                resyncCv.wait_for(lock, startStoken, std::chrono::milliseconds(delayMs),
+                                  [] { return false; });
             }
             fprintf(stderr, "[%s] snapshot fetch gave up after %d attempts\n", symbol.c_str(),
                     maxSnapshotRetries);
@@ -269,6 +401,9 @@ bool FeedHandler::initialize(
         if (!f.get()) {
             allOk = false;
         }
+    }
+    if (!allOk) {
+        stop();
     }
     return allOk;
 }

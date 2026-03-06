@@ -1,5 +1,3 @@
-#include <ixwebsocket/IXHttpClient.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -9,25 +7,30 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "feed_handler.hpp"
+#include "i_exchange_adapter.hpp"
 #include "metrics.hpp"
 #include "metrics_server.hpp"
 #include "order_book.hpp"
 
-/*
-  Setup (do once):
-  1. Open WebSocket to combo @depth stream — start buffering messages immediately
-  2. For each symbol, fetch REST snapshot: GET /api/v3/depth?symbol=X&limit=5000
-  3. Apply buffered messages that arrived during snapshot fetch
-  4. Process normally
-
-  Every subsequent message:
-  - If u < your current book's lastUpdateId → stale, ignore it
-  - If U > your current book's lastUpdateId + 1 → you missed events, restart from scratch
-  - Otherwise → apply the update, set your lastUpdateId = u
-*/
+/**
+ * @brief Program entry point that loads configuration, initializes order books, metrics, the
+ * exchange adapter and metrics server, then runs the monitoring loop.
+ *
+ * The first command-line argument (if present) is treated as the path to the JSON configuration
+ * file; otherwise "config.json" is used. The configuration controls update interval, snapshot
+ * depth, the list of symbols to watch, and the primary symbol. After successful initialization the
+ * function starts the metrics HTTP server and the exchange adapter, then enters an infinite loop
+ * that periodically prints per-symbol order book statistics and metrics.
+ *
+ * @param argc Number of command-line arguments.
+ * @param argv Array of command-line argument strings; argv[1] may provide the config file path.
+ * @return int `0` on normal termination (unreachable under normal operation), `-1` on
+ * configuration, initialization, or runtime startup errors.
+ */
 
 int main(int argc, char* argv[]) {
     const char* configPath = (argc > 1) ? argv[1] : "config.json";
@@ -81,9 +84,9 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    // Validate each entry and canonicalise: UPPERCASE for map keys, lowercase for the URL.
+    // Validate each entry and canonicalise to UPPERCASE for map keys.
     std::vector<std::string> symbols;
-    std::string urlStreams;
+    std::unordered_set<std::string> seen;
     for (const auto& entry : config["symbols"]) {
         if (!entry.is_string()) {
             fprintf(stderr, "config error: every entry in 'symbols' must be a string\n");
@@ -91,16 +94,13 @@ int main(int argc, char* argv[]) {
         }
         std::string sym = entry.get<std::string>();
         std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
-        symbols.push_back(sym);
-
-        std::string lower = sym;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (!urlStreams.empty()) {
-            urlStreams += "/";
+        if (seen.count(sym)) {
+            fprintf(stderr, "config error: duplicate symbol '%s'\n", sym.c_str());
+            return -1;
         }
-        urlStreams += lower + "@depth@" + std::to_string(updateIntervalMs) + "ms";
+        seen.insert(sym);
+        symbols.push_back(sym);
     }
-    const std::string url = "wss://stream.binance.com:9443/stream?streams=" + urlStreams;
 
     std::string primarySymbol = config["primary_symbol"].get<std::string>();
     std::transform(primarySymbol.begin(), primarySymbol.end(), primarySymbol.begin(), ::toupper);
@@ -118,10 +118,9 @@ int main(int argc, char* argv[]) {
         metricsMap[sym] = std::make_unique<Metrics>();
     }
 
-    ix::WebSocket webSocket;
-    webSocket.setUrl(url);
+    BinanceAdapter adapter(updateIntervalMs);
 
-    MetricsServer metricsServer(metricsMap, books);
+    MetricsServer metricsServer(adapter.exchangeName(), metricsMap, books);
     if (!metricsServer.start()) {
         fprintf(stderr, "couldn't bind metrics server on port 9090\n");
         return -1;
@@ -133,9 +132,8 @@ int main(int argc, char* argv[]) {
     }
     printf("\n");
 
-    FeedHandler feedHandler;
-    if (!feedHandler.initialize(symbols, books, webSocket, metricsMap, snapshotDepth)) {
-        fprintf(stderr, "failed to start feed handler\n");
+    if (!adapter.start(symbols, books, metricsMap, snapshotDepth)) {
+        fprintf(stderr, "failed to start exchange adapter\n");
         return -1;
     }
 
