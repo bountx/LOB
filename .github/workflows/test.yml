@@ -56,6 +56,7 @@ jobs:
             --ignore-errors mismatch
           lcov --remove coverage.info \
             '*/tests/*' \
+            '*/build/*' \
             --output-file coverage.info
           lcov --list coverage.info
 
