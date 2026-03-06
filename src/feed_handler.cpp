@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <future>
+#include <stdexcept>
 #include <stop_token>
 #include <thread>
 
@@ -13,7 +14,12 @@ namespace {
 constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
 }
 
-BinanceAdapter::BinanceAdapter(int updateIntervalMs) : updateIntervalMs(updateIntervalMs) {}
+BinanceAdapter::BinanceAdapter(int updateIntervalMs) : updateIntervalMs(updateIntervalMs) {
+    if (updateIntervalMs != 100 && updateIntervalMs != 1000) {
+        throw std::invalid_argument("BinanceAdapter: updateIntervalMs must be 100 or 1000, got " +
+                                    std::to_string(updateIntervalMs));
+    }
+}
 
 BinanceAdapter::~BinanceAdapter() { stop(); }
 
@@ -58,9 +64,12 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook&
 
     try {
         auto snapshot = nlohmann::json::parse(response->body);
-        orderBook.applySnapshot(snapshot);
 
+        // Hold bufferMutex across applySnapshot + buffer replay so that
+        // handleWsMessage cannot observe isSnapshotApplied()==true and apply
+        // a live update while we are still draining the pre-snapshot buffer.
         std::lock_guard<std::mutex> lock(bufferMutex);
+        orderBook.applySnapshot(snapshot);
         for (const auto& msg : symbolBuffers[symbol]) {
             if (!orderBook.applyUpdate(msg)) {
                 fprintf(stderr, "[%s] buffered message out of order, resyncing\n", symbol.c_str());
@@ -203,6 +212,15 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
                            std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,
                            std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
                            int snapshotDepthArg, int maxSnapshotRetries) {
+    for (const auto& sym : symbols) {
+        if (booksRef.find(sym) == booksRef.end() ||
+            metricsMapRef.find(sym) == metricsMapRef.end()) {
+            fprintf(stderr, "BinanceAdapter::start: symbol '%s' missing from books or metricsMap\n",
+                    sym.c_str());
+            return false;
+        }
+    }
+
     books = &booksRef;
     metricsMap = &metricsMapRef;
     snapshotDepth = snapshotDepthArg;
@@ -239,6 +257,8 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
             wsReady.wait_for(lock, std::chrono::seconds(30), [this] { return wsConnected; });
         if (!connected) {
             fprintf(stderr, "WebSocket didn't connect within 30s\n");
+            lock.unlock();
+            webSocket.stop();
             return false;
         }
     }

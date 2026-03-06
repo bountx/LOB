@@ -60,7 +60,7 @@
           "refId": "A"
         },
         {
-          "expr": "rate(lob_messages_total{symbol=\"$symbol\"}[1m])",
+          "expr": "rate(lob_messages_total{exchange=~\"$exchange\",symbol=\"$symbol\"}[1m])",
           "legendFormat": "{{symbol}} msg/s",
           "refId": "B"
         }
@@ -137,7 +137,7 @@
           "refId": "B"
         },
         {
-          "expr": "lob_processing_time_microseconds{symbol=\"$symbol\"}",
+          "expr": "lob_processing_time_microseconds{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "{{symbol}} µs",
           "refId": "C"
         }
@@ -172,12 +172,12 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_best_ask_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_ask_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Ask",
           "refId": "A"
         },
         {
-          "expr": "lob_orderbook_best_bid_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_bid_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Bid",
           "refId": "B"
         }
@@ -205,7 +205,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_spread_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_spread_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "spread USD",
           "refId": "A"
         }
@@ -233,12 +233,12 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_asks_count{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_asks_count{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Asks",
           "refId": "A"
         },
         {
-          "expr": "lob_orderbook_bids_count{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_bids_count{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Bids",
           "refId": "B"
         }
@@ -271,7 +271,7 @@
         },
         {
           "expr": "max by(exchange) (lob_event_lag_milliseconds)",
-          "legendFormat": "{{exchange}} Lag (ms)",
+          "legendFormat": "Event Lag (ms)",
           "refId": "B"
         },
         {
@@ -280,17 +280,17 @@
           "refId": "C"
         },
         {
-          "expr": "lob_orderbook_best_ask_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_ask_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Ask",
           "refId": "D"
         },
         {
-          "expr": "lob_orderbook_best_bid_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_bid_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Bid",
           "refId": "E"
         },
         {
-          "expr": "lob_orderbook_spread_price{symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_spread_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Spread",
           "refId": "F"
         }

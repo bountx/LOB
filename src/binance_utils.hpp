@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cctype>
 #include <string>
 
 // Extracts the symbol from a Binance combined-stream name and uppercases it.
@@ -12,6 +13,7 @@
 // used in the order book and metrics maps.
 inline std::string streamToSymbol(const std::string& stream) {
     std::string sym = stream.substr(0, stream.find('@'));
-    std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
+    std::transform(sym.begin(), sym.end(), sym.begin(),
+                   [](unsigned char c) { return ::toupper(c); });
     return sym;
 }

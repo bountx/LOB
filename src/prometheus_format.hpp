@@ -10,6 +10,25 @@
 #include "metrics.hpp"
 #include "order_book.hpp"
 
+// Escapes a Prometheus label value per the text exposition format spec:
+// backslash → \\, double-quote → \", newline → \n
+inline std::string escapeLabelValue(std::string_view v) {
+    std::string out;
+    out.reserve(v.size());
+    for (char c : v) {
+        if (c == '\\') {
+            out += "\\\\";
+        } else if (c == '"') {
+            out += "\\\"";
+        } else if (c == '\n') {
+            out += "\\n";
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
 // Builds a Prometheus text exposition for all symbols managed by one adapter.
 //
 // Each metric line gets both exchange="..." and symbol="..." labels so series
@@ -32,8 +51,8 @@ inline std::string buildPrometheusOutput(
         ss << "# TYPE " << name << " gauge\n";
     };
     auto writeLine = [&](const char* name, const std::string& symbol, double value) {
-        ss << name << "{exchange=\"" << exchange << "\",symbol=\"" << symbol << "\"} " << value
-           << "\n";
+        ss << name << "{exchange=\"" << escapeLabelValue(exchange) << "\",symbol=\""
+           << escapeLabelValue(symbol) << "\"} " << value << "\n";
     };
 
     writeCounterHeader("lob_messages_total", "Total messages received from exchange");

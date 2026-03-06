@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
     printf("\n");
 
     if (!adapter.start(symbols, books, metricsMap, snapshotDepth)) {
-        fprintf(stderr, "failed to start feed handler\n");
+        fprintf(stderr, "failed to start exchange adapter\n");
         return -1;
     }
 
