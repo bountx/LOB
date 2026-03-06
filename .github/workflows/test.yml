@@ -62,4 +62,5 @@ jobs:
         with:
           files: coverage.info
           token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
           fail_ci_if_error: false
