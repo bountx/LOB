@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "feed_handler.hpp"
@@ -79,6 +80,7 @@ int main(int argc, char* argv[]) {
 
     // Validate each entry and canonicalise to UPPERCASE for map keys.
     std::vector<std::string> symbols;
+    std::unordered_set<std::string> seen;
     for (const auto& entry : config["symbols"]) {
         if (!entry.is_string()) {
             fprintf(stderr, "config error: every entry in 'symbols' must be a string\n");
@@ -86,6 +88,11 @@ int main(int argc, char* argv[]) {
         }
         std::string sym = entry.get<std::string>();
         std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
+        if (seen.count(sym)) {
+            fprintf(stderr, "config error: duplicate symbol '%s'\n", sym.c_str());
+            return -1;
+        }
+        seen.insert(sym);
         symbols.push_back(sym);
     }
 

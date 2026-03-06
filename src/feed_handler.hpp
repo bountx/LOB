@@ -52,7 +52,7 @@ private:
 
     std::queue<std::string> resyncQueue;
     std::mutex resyncMutex;
-    std::condition_variable resyncCv;
+    std::condition_variable_any resyncCv;
 
     std::mutex wsReadyMutex;
     std::condition_variable wsReady;
@@ -64,8 +64,9 @@ private:
 
     // Fetches a depth snapshot from the Binance REST API and applies it to the order book.
     // On 429 (rate limited) or 418 (IP banned), sleeps before returning false so the caller
-    // doesn't immediately retry and dig the hole deeper.
-    bool fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook);
+    // doesn't immediately retry and dig the hole deeper. The sleep is interruptible via stoken.
+    bool fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook,
+                               std::stop_token stoken);
 
     void handleWsMessage(const ix::WebSocketMessagePtr& msg);
 

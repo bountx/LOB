@@ -59,9 +59,11 @@ void BinanceAdapter::stop() {
  *
  * @param symbol Symbol identifier used in the Binance REST request (e.g., "BTCUSDT").
  * @param orderBook OrderBook instance to receive the applied snapshot and subsequent replayed updates.
+ * @param stoken Stop token used to interrupt any waits caused by rate limiting or IP bans, allowing for graceful shutdown.
  * @return `true` if the snapshot was applied and all buffered updates were successfully replayed; `false` otherwise.
  */
-bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook) {
+bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook,
+                                           std::stop_token stoken) {
     ix::HttpClient httpClient;
     auto args = std::make_shared<ix::HttpRequestArgs>();
     args->connectTimeout = 5;
@@ -79,12 +81,14 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook&
             }
         }
         fprintf(stderr, "[%s] got 429, waiting %ds before retry\n", symbol.c_str(), retryAfterSec);
-        std::this_thread::sleep_for(std::chrono::seconds(retryAfterSec));
+        std::unique_lock<std::mutex> lock(resyncMutex);
+        resyncCv.wait_for(lock, stoken, std::chrono::seconds(retryAfterSec), [] { return false; });
         return false;
     }
     if (response->statusCode == 418) {
         fprintf(stderr, "[%s] IP banned (418), waiting 120s\n", symbol.c_str());
-        std::this_thread::sleep_for(std::chrono::seconds(120));
+        std::unique_lock<std::mutex> lock(resyncMutex);
+        resyncCv.wait_for(lock, stoken, std::chrono::seconds(120), [] { return false; });
         return false;
     }
     if (response->statusCode != 200) {
@@ -226,13 +230,12 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
  *               request graceful shutdown.
  */
 void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken) {
-    std::stop_callback wake(stoken, [this] { resyncCv.notify_one(); });
-    while (!stoken.stop_requested()) {
+    while (true) {
         std::string symbol;
         {
             std::unique_lock<std::mutex> lock(resyncMutex);
-            resyncCv.wait(lock, [&] { return !resyncQueue.empty() || stoken.stop_requested(); });
-            if (stoken.stop_requested()) {
+            // wait() with stop_token: returns false immediately if stop is requested.
+            if (!resyncCv.wait(lock, stoken, [&] { return !resyncQueue.empty(); })) {
                 break;
             }
             symbol = resyncQueue.front();
@@ -240,13 +243,21 @@ void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token sto
         }
         for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
             printf("[%s] resyncing (attempt %d/%d)\n", symbol.c_str(), attempt, maxSnapshotRetries);
-            if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
+            if (fetchAndApplySnapshot(symbol, *books->at(symbol), stoken)) {
                 break;
             }
-            if (attempt < maxSnapshotRetries && !stoken.stop_requested()) {
+            if (stoken.stop_requested()) {
+                return;
+            }
+            if (attempt < maxSnapshotRetries) {
                 int delayMs = 1000 * attempt;
                 printf("[%s] resync failed, retrying in %dms\n", symbol.c_str(), delayMs);
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                std::unique_lock<std::mutex> lock(resyncMutex);
+                resyncCv.wait_for(lock, stoken, std::chrono::milliseconds(delayMs),
+                                  [] { return false; });
+                if (stoken.stop_requested()) {
+                    return;
+                }
             }
         }
         if (!books->at(symbol)->isSnapshotApplied()) {
@@ -257,8 +268,12 @@ void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token sto
         // Small gap before picking up the next symbol. When several symbols fall out of sync
         // at once (common after a network hiccup), they all land in the queue together, and
         // processing them without any delay would fire REST requests back-to-back.
-        if (!stoken.stop_requested()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        {
+            std::unique_lock<std::mutex> lock(resyncMutex);
+            resyncCv.wait_for(lock, stoken, std::chrono::milliseconds(500), [] { return false; });
+        }
+        if (stoken.stop_requested()) {
+            return;
         }
     }
 }
@@ -343,6 +358,7 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
     // which is fine in isolation, but Docker restarts compound this fast enough to earn a 429
     // or 418 ban. A 300ms gap between launches keeps only a handful of requests in-flight at a
     // time.
+    std::stop_token startStoken = resyncThread.get_stop_token();
     std::vector<std::future<bool>> futures;
     futures.reserve(symbols.size());
     for (size_t i = 0; i < symbols.size(); ++i) {
@@ -350,24 +366,28 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
         const auto& symbol = symbols[i];
-        futures.push_back(std::async(std::launch::async, [this, symbol, maxSnapshotRetries]() {
-            for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-                printf("[%s] fetching snapshot (attempt %d/%d)\n", symbol.c_str(), attempt,
-                       maxSnapshotRetries);
-                if (fetchAndApplySnapshot(symbol, *books->at(symbol))) {
-                    return true;
+        futures.push_back(
+            std::async(std::launch::async, [this, symbol, maxSnapshotRetries, startStoken]() {
+                for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+                    printf("[%s] fetching snapshot (attempt %d/%d)\n", symbol.c_str(), attempt,
+                           maxSnapshotRetries);
+                    if (fetchAndApplySnapshot(symbol, *books->at(symbol), startStoken)) {
+                        return true;
+                    }
+                    if (startStoken.stop_requested() || attempt == maxSnapshotRetries) {
+                        break;
+                    }
+                    int delayMs = 1000 * attempt;
+                    printf("[%s] snapshot fetch failed, retrying in %dms\n", symbol.c_str(),
+                           delayMs);
+                    std::unique_lock<std::mutex> lock(resyncMutex);
+                    resyncCv.wait_for(lock, startStoken, std::chrono::milliseconds(delayMs),
+                                      [] { return false; });
                 }
-                if (attempt == maxSnapshotRetries) {
-                    break;
-                }
-                int delayMs = 1000 * attempt;
-                printf("[%s] snapshot fetch failed, retrying in %dms\n", symbol.c_str(), delayMs);
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-            }
-            fprintf(stderr, "[%s] snapshot fetch gave up after %d attempts\n", symbol.c_str(),
-                    maxSnapshotRetries);
-            return false;
-        }));
+                fprintf(stderr, "[%s] snapshot fetch gave up after %d attempts\n", symbol.c_str(),
+                        maxSnapshotRetries);
+                return false;
+            }));
     }
 
     bool allOk = true;
@@ -375,6 +395,9 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
         if (!f.get()) {
             allOk = false;
         }
+    }
+    if (!allOk) {
+        stop();
     }
     return allOk;
 }
