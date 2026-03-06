@@ -91,10 +91,19 @@ inline std::string buildPrometheusOutput(
         }
     }
 
-    writeGaugeHeader("lob_orderbook_spread_price", "Spread between best ask and best bid in USD");
-    for (const auto& [sym, stats] : allStats) {
-        if (stats.bestAsk > 0.0 && stats.bestBid > 0.0) {
-            writeLine("lob_orderbook_spread_price", sym, stats.bestAsk - stats.bestBid);
+    {
+        std::vector<std::pair<std::string, double>> spreadLines;
+        for (const auto& [sym, stats] : allStats) {
+            if (stats.bestAsk > 0.0 && stats.bestBid > 0.0) {
+                spreadLines.emplace_back(sym, stats.bestAsk - stats.bestBid);
+            }
+        }
+        if (!spreadLines.empty()) {
+            writeGaugeHeader("lob_orderbook_spread_price",
+                             "Spread between best ask and best bid in USD");
+            for (const auto& [sym, spread] : spreadLines) {
+                writeLine("lob_orderbook_spread_price", sym, spread);
+            }
         }
     }
 
