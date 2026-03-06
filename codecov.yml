@@ -1,0 +1,15 @@
+coverage:
+  precision: 2
+  round: down
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+
+fixes:
+  - "/home/runner/work/LOB/LOB/::"
+
+ignore:
+  - "build/**"
+  - "tests/**"
