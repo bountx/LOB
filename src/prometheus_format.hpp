@@ -11,7 +11,17 @@
 #include "order_book.hpp"
 
 // Escapes a Prometheus label value per the text exposition format spec:
-// backslash → \\, double-quote → \", newline → \n
+/**
+ * Escape a Prometheus label value by replacing special characters with backslash-escaped sequences.
+ *
+ * Replaces:
+ * - backslash (`\`) with `\\`
+ * - double-quote (`"`) with `\"`
+ * - newline with `\n`
+ *
+ * @param v Label value to escape.
+ * @return Escaped string where backslash is replaced with `\\`, double-quote with `\"`, and newline with `\n`.
+ */
 inline std::string escapeLabelValue(std::string_view v) {
     std::string out;
     out.reserve(v.size());
@@ -35,7 +45,26 @@ inline std::string escapeLabelValue(std::string_view v) {
 // from different adapters don't collide in a multi-exchange setup.
 //
 // Spread and best-price lines are skipped when the book is empty (no snapshot
-// yet) to avoid zero-valued prices breaking min() aggregations.
+/**
+ * Builds a Prometheus text exposition containing adapter metrics and order book statistics,
+ * emitting metric lines labeled with `exchange` and `symbol`.
+ *
+ * Emits the following metrics when available:
+ * - lob_messages_total
+ * - lob_event_lag_milliseconds
+ * - lob_processing_time_microseconds
+ * - lob_max_processing_time_microseconds
+ * - lob_orderbook_asks_count
+ * - lob_orderbook_bids_count
+ * - lob_orderbook_best_ask_price (only for positive best-ask)
+ * - lob_orderbook_best_bid_price (only for positive best-bid)
+ * - lob_orderbook_spread_price (only when both best-ask and best-bid are positive)
+ *
+ * @param exchange Identifier for the adapter; used as the `exchange` label value.
+ * @param metricsMap Map from symbol to Metrics; used for message counts and processing/lag values.
+ * @param books Map from symbol to OrderBook; used to obtain per-symbol order book stats (asks/bids counts, best prices).
+ * @return std::string Prometheus exposition text including HELP/TYPE headers and metric lines. Best-price and spread metrics are omitted when price values are not positive.
+ */
 inline std::string buildPrometheusOutput(
     std::string_view exchange,
     const std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,

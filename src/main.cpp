@@ -15,18 +15,15 @@
 #include "metrics_server.hpp"
 #include "order_book.hpp"
 
-/*
-  Setup (do once):
-  1. Open WebSocket to combo @depth stream — start buffering messages immediately
-  2. For each symbol, fetch REST snapshot: GET /api/v3/depth?symbol=X&limit=5000
-  3. Apply buffered messages that arrived during snapshot fetch
-  4. Process normally
-
-  Every subsequent message:
-  - If u < your current book's lastUpdateId → stale, ignore it
-  - If U > your current book's lastUpdateId + 1 → you missed events, restart from scratch
-  - Otherwise → apply the update, set your lastUpdateId = u
-*/
+/**
+ * @brief Program entry point that loads configuration, initializes order books, metrics, the exchange adapter and metrics server, then runs the monitoring loop.
+ *
+ * The first command-line argument (if present) is treated as the path to the JSON configuration file; otherwise "config.json" is used. The configuration controls update interval, snapshot depth, the list of symbols to watch, and the primary symbol. After successful initialization the function starts the metrics HTTP server and the exchange adapter, then enters an infinite loop that periodically prints per-symbol order book statistics and metrics.
+ *
+ * @param argc Number of command-line arguments.
+ * @param argv Array of command-line argument strings; argv[1] may provide the config file path.
+ * @return int `0` on normal termination (unreachable under normal operation), `-1` on configuration, initialization, or runtime startup errors.
+ */
 
 int main(int argc, char* argv[]) {
     const char* configPath = (argc > 1) ? argv[1] : "config.json";

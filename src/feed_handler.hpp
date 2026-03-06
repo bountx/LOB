@@ -24,7 +24,12 @@ public:
     explicit BinanceAdapter(int updateIntervalMs = 100);
     ~BinanceAdapter() override;
 
-    std::string_view exchangeName() const override { return "binance"; }
+    /**
+ * @brief Identifies the exchange implementation.
+ *
+ * @return std::string_view Exchange identifier "binance".
+ */
+std::string_view exchangeName() const override { return "binance"; }
 
     // Builds the WebSocket URL from symbols, connects, fetches snapshots, and starts streaming.
     // Returns false if the WebSocket doesn't connect or any snapshot can't be fetched.

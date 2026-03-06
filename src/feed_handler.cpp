@@ -14,6 +14,14 @@ namespace {
 constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
 }
 
+/**
+ * @brief Construct a BinanceAdapter configured for the specified depth update interval.
+ *
+ * Initializes the adapter's update interval used when subscribing to Binance depth streams.
+ *
+ * @param updateIntervalMs Milliseconds between depth update snapshots; must be either 100 or 1000.
+ * @throws std::invalid_argument if `updateIntervalMs` is not 100 or 1000.
+ */
 BinanceAdapter::BinanceAdapter(int updateIntervalMs) : updateIntervalMs(updateIntervalMs) {
     if (updateIntervalMs != 100 && updateIntervalMs != 1000) {
         throw std::invalid_argument("BinanceAdapter: updateIntervalMs must be 100 or 1000, got " +
@@ -21,8 +29,20 @@ BinanceAdapter::BinanceAdapter(int updateIntervalMs) : updateIntervalMs(updateIn
     }
 }
 
+/**
+ * @brief Cleans up the adapter, ensuring background workers and connections are stopped.
+ *
+ * Ensures the resync worker is requested to stop, the resync condition variable is
+ * notified, the resync thread is joined/reset, and the WebSocket client is stopped.
+ */
 BinanceAdapter::~BinanceAdapter() { stop(); }
 
+/**
+ * @brief Stops background processing and shuts down the WebSocket connection.
+ *
+ * Requests cancellation of the resync worker, wakes the resync condition variable,
+ * joins and destroys the resync thread, and stops the WebSocket client.
+ */
 void BinanceAdapter::stop() {
     resyncThread.request_stop();
     resyncCv.notify_one();
@@ -30,6 +50,17 @@ void BinanceAdapter::stop() {
     webSocket.stop();
 }
 
+/**
+ * @brief Fetches a depth snapshot for a symbol from Binance and applies it to the given order book.
+ *
+ * Attempts to download the REST order-book snapshot for `symbol`, apply it to `orderBook`, and then replay any
+ * pre-snapshot buffered websocket updates for that symbol atomically. If the HTTP response indicates rate limiting
+ * or an IP ban the function will wait according to the server's guidance (or a default) and return `false`.
+ *
+ * @param symbol Symbol identifier used in the Binance REST request (e.g., "BTCUSDT").
+ * @param orderBook OrderBook instance to receive the applied snapshot and subsequent replayed updates.
+ * @return `true` if the snapshot was applied and all buffered updates were successfully replayed; `false` otherwise.
+ */
 bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook) {
     ix::HttpClient httpClient;
     auto args = std::make_shared<ix::HttpRequestArgs>();
@@ -85,6 +116,17 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook&
     }
 }
 
+/**
+ * @brief Process an incoming WebSocket event from Binance and update state or metrics accordingly.
+ *
+ * Handles connection lifecycle events (Open/Close/Error) and parses combo-stream messages for order-book updates.
+ * While a symbol's initial snapshot is missing, messages are buffered. After snapshot application, updates are applied to
+ * the corresponding OrderBook; on update failures the symbol is scheduled for resynchronization and its buffer is cleared.
+ * Processing time and event lag are recorded in the associated Metrics.
+ *
+ * @param msg Pointer to the WebSocket message; for data messages it is expected to contain a Binance combo stream JSON
+ *            object with fields `"stream"` and `"data"`.
+ */
 void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     if (msg->type == ix::WebSocketMessageType::Open) {
         printf("connected\n");
@@ -170,6 +212,19 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     }
 }
 
+/**
+ * @brief Background worker that processes symbols needing resynchronization.
+ *
+ * Waits for symbols enqueued for resync, then attempts up to `maxSnapshotRetries`
+ * to fetch and apply a fresh snapshot for each symbol. Retries use an increasing
+ * delay (1000ms * attempt) between attempts, and a 500ms pause is added after
+ * each symbol to avoid bursting REST requests. The worker wakes and exits when
+ * `stoken` requests stop.
+ *
+ * @param maxSnapshotRetries Maximum number of snapshot fetch attempts per symbol.
+ * @param stoken Stop token used to interrupt waiting, wake the worker, and
+ *               request graceful shutdown.
+ */
 void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken) {
     std::stop_callback wake(stoken, [this] { resyncCv.notify_one(); });
     while (!stoken.stop_requested()) {
@@ -208,6 +263,23 @@ void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token sto
     }
 }
 
+/**
+ * @brief Initialize the adapter for a set of trading symbols, establish streaming, start
+ * the resync worker, and load initial order book snapshots.
+ *
+ * Validates that each symbol has an associated OrderBook and Metrics, configures internal
+ * references and snapshot depth, opens the Binance combined WebSocket stream for the symbols,
+ * starts the background resync thread, and concurrently fetches and applies initial REST
+ * snapshots for each symbol with retry/backoff and a staggered launch to avoid rate limits.
+ *
+ * @param symbols List of symbol names to subscribe and initialize (e.g., "BTCUSDT").
+ * @param booksRef Map of symbol -> owned OrderBook instances; must contain every symbol.
+ * @param metricsMapRef Map of symbol -> owned Metrics instances; must contain every symbol.
+ * @param snapshotDepthArg Depth parameter used when requesting REST order book snapshots.
+ * @param maxSnapshotRetries Maximum number of attempts per-symbol to fetch and apply the initial snapshot.
+ * @return true if the adapter connected and all initial snapshots were successfully applied; `false` if
+ *         validation failed, the WebSocket failed to connect, or any symbol failed to obtain a snapshot.
+ */
 bool BinanceAdapter::start(const std::vector<std::string>& symbols,
                            std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,
                            std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
