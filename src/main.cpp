@@ -1,5 +1,3 @@
-#include <ixwebsocket/IXHttpClient.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -12,6 +10,7 @@
 #include <vector>
 
 #include "feed_handler.hpp"
+#include "i_exchange_adapter.hpp"
 #include "metrics.hpp"
 #include "metrics_server.hpp"
 #include "order_book.hpp"
@@ -81,9 +80,8 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    // Validate each entry and canonicalise: UPPERCASE for map keys, lowercase for the URL.
+    // Validate each entry and canonicalise to UPPERCASE for map keys.
     std::vector<std::string> symbols;
-    std::string urlStreams;
     for (const auto& entry : config["symbols"]) {
         if (!entry.is_string()) {
             fprintf(stderr, "config error: every entry in 'symbols' must be a string\n");
@@ -92,15 +90,7 @@ int main(int argc, char* argv[]) {
         std::string sym = entry.get<std::string>();
         std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
         symbols.push_back(sym);
-
-        std::string lower = sym;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (!urlStreams.empty()) {
-            urlStreams += "/";
-        }
-        urlStreams += lower + "@depth@" + std::to_string(updateIntervalMs) + "ms";
     }
-    const std::string url = "wss://stream.binance.com:9443/stream?streams=" + urlStreams;
 
     std::string primarySymbol = config["primary_symbol"].get<std::string>();
     std::transform(primarySymbol.begin(), primarySymbol.end(), primarySymbol.begin(), ::toupper);
@@ -118,10 +108,9 @@ int main(int argc, char* argv[]) {
         metricsMap[sym] = std::make_unique<Metrics>();
     }
 
-    ix::WebSocket webSocket;
-    webSocket.setUrl(url);
+    BinanceAdapter adapter(updateIntervalMs);
 
-    MetricsServer metricsServer(metricsMap, books);
+    MetricsServer metricsServer(adapter.exchangeName(), metricsMap, books);
     if (!metricsServer.start()) {
         fprintf(stderr, "couldn't bind metrics server on port 9090\n");
         return -1;
@@ -133,8 +122,7 @@ int main(int argc, char* argv[]) {
     }
     printf("\n");
 
-    FeedHandler feedHandler;
-    if (!feedHandler.initialize(symbols, books, webSocket, metricsMap, snapshotDepth)) {
+    if (!adapter.start(symbols, books, metricsMap, snapshotDepth)) {
         fprintf(stderr, "failed to start feed handler\n");
         return -1;
     }

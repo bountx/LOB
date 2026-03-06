@@ -15,11 +15,26 @@
   "templating": {
     "list": [
       {
+        "name": "exchange",
+        "label": "Exchange",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(lob_messages_total, exchange)",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": true,
+        "allValue": ".*",
+        "sort": 1,
+        "hide": 0,
+        "options": [],
+        "current": {}
+      },
+      {
         "name": "symbol",
         "label": "Symbol",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(lob_messages_total, symbol)",
+        "query": "label_values(lob_messages_total{exchange=~\"$exchange\"}, symbol)",
         "refresh": 1,
         "multi": false,
         "includeAll": false,
@@ -66,19 +81,19 @@
     {
       "id": 2,
       "title": "Event Lag",
-      "description": "Worst-case lag across all symbols, with selected symbol overlaid for comparison",
+      "description": "Worst-case lag per exchange, with selected symbol overlaid for comparison",
       "type": "timeseries",
       "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "max(lob_event_lag_milliseconds)",
-          "legendFormat": "worst lag ms (all)",
+          "expr": "max by(exchange) (lob_event_lag_milliseconds)",
+          "legendFormat": "{{exchange}} worst lag ms",
           "refId": "A"
         },
         {
-          "expr": "lob_event_lag_milliseconds{symbol=\"$symbol\"}",
-          "legendFormat": "{{symbol}} lag ms",
+          "expr": "lob_event_lag_milliseconds{exchange=~\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "{{exchange}} {{symbol}} lag ms",
           "refId": "B"
         }
       ],
@@ -255,8 +270,8 @@
           "refId": "A"
         },
         {
-          "expr": "max(lob_event_lag_milliseconds)",
-          "legendFormat": "Worst Lag (ms)",
+          "expr": "max by(exchange) (lob_event_lag_milliseconds)",
+          "legendFormat": "{{exchange}} Lag (ms)",
           "refId": "B"
         },
         {

@@ -8,25 +8,37 @@
 #include <queue>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
+#include "binance_utils.hpp"
+#include "i_exchange_adapter.hpp"
 #include "metrics.hpp"
 #include "order_book.hpp"
 
-class FeedHandler {
+class BinanceAdapter : public IExchangeAdapter {
 public:
-    // Connects the WebSocket, starts the resync worker, and fetches initial snapshots for all
-    // symbols. Snapshot requests are staggered to stay within Binance REST rate limits.
+    // updateIntervalMs must be 100 or 1000, matching the Binance stream suffix (@depth@100ms).
+    explicit BinanceAdapter(int updateIntervalMs = 100);
+    ~BinanceAdapter() override;
+
+    std::string_view exchangeName() const override { return "binance"; }
+
+    // Builds the WebSocket URL from symbols, connects, fetches snapshots, and starts streaming.
     // Returns false if the WebSocket doesn't connect or any snapshot can't be fetched.
-    bool initialize(const std::vector<std::string>& symbols,
-                    std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
-                    ix::WebSocket& webSocket,
-                    std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
-                    int snapshotDepth = 1000, int maxSnapshotRetries = 5);
+    bool start(const std::vector<std::string>& symbols,
+               std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
+               std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
+               int snapshotDepth = 1000, int maxSnapshotRetries = 5) override;
+
+    void stop() override;
 
 private:
+    ix::WebSocket webSocket;
+    int updateIntervalMs;
+
     std::unordered_map<std::string, std::unique_ptr<OrderBook>>* books = nullptr;
     std::unordered_map<std::string, std::unique_ptr<Metrics>>* metricsMap = nullptr;
 
@@ -42,9 +54,6 @@ private:
     bool wsConnected = false;
 
     std::jthread resyncThread;
-
-    // "btcusdt@depth" → "BTCUSDT"
-    static std::string streamToSymbol(const std::string& stream);
 
     int snapshotDepth = 1000;
 

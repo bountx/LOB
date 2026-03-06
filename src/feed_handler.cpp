@@ -13,13 +13,18 @@ namespace {
 constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
 }
 
-std::string FeedHandler::streamToSymbol(const std::string& stream) {
-    std::string sym = stream.substr(0, stream.find('@'));
-    std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
-    return sym;
+BinanceAdapter::BinanceAdapter(int updateIntervalMs) : updateIntervalMs(updateIntervalMs) {}
+
+BinanceAdapter::~BinanceAdapter() { stop(); }
+
+void BinanceAdapter::stop() {
+    resyncThread.request_stop();
+    resyncCv.notify_one();
+    resyncThread = {};  // join + destroy
+    webSocket.stop();
 }
 
-bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook) {
+bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook) {
     ix::HttpClient httpClient;
     auto args = std::make_shared<ix::HttpRequestArgs>();
     args->connectTimeout = 5;
@@ -71,7 +76,7 @@ bool FeedHandler::fetchAndApplySnapshot(const std::string& symbol, OrderBook& or
     }
 }
 
-void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
+void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     if (msg->type == ix::WebSocketMessageType::Open) {
         printf("connected\n");
         std::lock_guard<std::mutex> lock(wsReadyMutex);
@@ -156,7 +161,7 @@ void FeedHandler::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     }
 }
 
-void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken) {
+void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken) {
     std::stop_callback wake(stoken, [this] { resyncCv.notify_one(); });
     while (!stoken.stop_requested()) {
         std::string symbol;
@@ -194,11 +199,10 @@ void FeedHandler::runResyncWorker(int maxSnapshotRetries, std::stop_token stoken
     }
 }
 
-bool FeedHandler::initialize(
-    const std::vector<std::string>& symbols,
-    std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef, ix::WebSocket& webSocket,
-    std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef, int snapshotDepthArg,
-    int maxSnapshotRetries) {
+bool BinanceAdapter::start(const std::vector<std::string>& symbols,
+                           std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,
+                           std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
+                           int snapshotDepthArg, int maxSnapshotRetries) {
     books = &booksRef;
     metricsMap = &metricsMapRef;
     snapshotDepth = snapshotDepthArg;
@@ -214,6 +218,16 @@ bool FeedHandler::initialize(
         std::lock_guard<std::mutex> lock(wsReadyMutex);
         wsConnected = false;
     }
+
+    // Build the combo stream URL from the symbol list.
+    std::string urlStreams;
+    for (const auto& sym : symbols) {
+        std::string lower = sym;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (!urlStreams.empty()) urlStreams += "/";
+        urlStreams += lower + "@depth@" + std::to_string(updateIntervalMs) + "ms";
+    }
+    webSocket.setUrl("wss://stream.binance.com:9443/stream?streams=" + urlStreams);
 
     webSocket.setOnMessageCallback(
         [this](const ix::WebSocketMessagePtr& msg) { handleWsMessage(msg); });
