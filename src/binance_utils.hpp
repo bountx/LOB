@@ -18,7 +18,8 @@
  * string is returned.
  *
  * @param stream Combined-stream name (e.g., "btcusdt@depth" or "ethusdt@aggTrade").
- * @return Uppercased symbol extracted from before the first '@' (or the entire uppercased input if no '@').
+ * @return Uppercased symbol extracted from before the first '@' (or the entire uppercased input if
+ * no '@').
  */
 inline std::string streamToSymbol(const std::string& stream) {
     std::string sym = stream.substr(0, stream.find('@'));

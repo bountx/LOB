@@ -20,7 +20,8 @@
  * - newline with `\n`
  *
  * @param v Label value to escape.
- * @return Escaped string where backslash is replaced with `\\`, double-quote with `\"`, and newline with `\n`.
+ * @return Escaped string where backslash is replaced with `\\`, double-quote with `\"`, and newline
+ * with `\n`.
  */
 inline std::string escapeLabelValue(std::string_view v) {
     std::string out;
@@ -62,8 +63,10 @@ inline std::string escapeLabelValue(std::string_view v) {
  *
  * @param exchange Identifier for the adapter; used as the `exchange` label value.
  * @param metricsMap Map from symbol to Metrics; used for message counts and processing/lag values.
- * @param books Map from symbol to OrderBook; used to obtain per-symbol order book stats (asks/bids counts, best prices).
- * @return std::string Prometheus exposition text including HELP/TYPE headers and metric lines. Best-price and spread metrics are omitted when price values are not positive.
+ * @param books Map from symbol to OrderBook; used to obtain per-symbol order book stats (asks/bids
+ * counts, best prices).
+ * @return std::string Prometheus exposition text including HELP/TYPE headers and metric lines.
+ * Best-price and spread metrics are omitted when price values are not positive.
  */
 inline std::string buildPrometheusOutput(
     std::string_view exchange,

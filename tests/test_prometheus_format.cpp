@@ -36,8 +36,10 @@ nlohmann::json makeSnap(long long lastUpdateId,
 /**
  * Extracts all non-empty, non-comment data lines from a Prometheus exposition text block.
  *
- * @param output The full Prometheus exposition text (may contain comment lines starting with `#` and blank lines).
- * @return std::vector<std::string> A vector containing each data line (lines that are not empty and do not start with `#`), in their original order without trailing newlines.
+ * @param output The full Prometheus exposition text (may contain comment lines starting with `#`
+ * and blank lines).
+ * @return std::vector<std::string> A vector containing each data line (lines that are not empty and
+ * do not start with `#`), in their original order without trailing newlines.
  */
 std::vector<std::string> dataLines(const std::string& output) {
     std::vector<std::string> result;
@@ -68,10 +70,12 @@ struct PrometheusFormatTest : testing::Test {
     }
 
     /**
-     * @brief Builds a Prometheus exposition-format text block for the fixture's metrics and order books.
+     * @brief Builds a Prometheus exposition-format text block for the fixture's metrics and order
+     * books.
      *
      * @param exchange Exchange label value to include on each metric line; defaults to "testex".
-     * @return std::string Prometheus-formatted text containing HELP/TYPE headers and metric data lines for the fixture's metrics and books.
+     * @return std::string Prometheus-formatted text containing HELP/TYPE headers and metric data
+     * lines for the fixture's metrics and books.
      */
     std::string build(std::string_view exchange = "testex") {
         return buildPrometheusOutput(exchange, metrics, books);

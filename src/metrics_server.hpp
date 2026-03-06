@@ -16,14 +16,16 @@
 class MetricsServer {
 public:
     /**
-         * @brief Construct a MetricsServer that serves Prometheus metrics and health for an exchange.
-         *
-         * @param exchange Identifier of the exchange whose metrics will be exposed.
-         * @param metricsMap Reference to the map of metric objects indexed by symbol; the server stores this reference and reads metrics from it.
-         * @param books Reference to the map of order books indexed by symbol; the server stores this reference and reads book state from it.
-         * @param port TCP port to bind the HTTP metrics/health server to (default 9090).
-         */
-        MetricsServer(std::string_view exchange,
+     * @brief Construct a MetricsServer that serves Prometheus metrics and health for an exchange.
+     *
+     * @param exchange Identifier of the exchange whose metrics will be exposed.
+     * @param metricsMap Reference to the map of metric objects indexed by symbol; the server stores
+     * this reference and reads metrics from it.
+     * @param books Reference to the map of order books indexed by symbol; the server stores this
+     * reference and reads book state from it.
+     * @param port TCP port to bind the HTTP metrics/health server to (default 9090).
+     */
+    MetricsServer(std::string_view exchange,
                   std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
                   std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
                   int port = 9090)
@@ -85,7 +87,8 @@ private:
      * Builds the full Prometheus exposition text representing the current state of the stored
      * metrics and order books for the exchange associated with this MetricsServer.
      *
-     * @return std::string Prometheus exposition body ready to be served (plain text in Prometheus format).
+     * @return std::string Prometheus exposition body ready to be served (plain text in Prometheus
+     * format).
      */
     std::string buildPrometheusMetrics() {
         return buildPrometheusOutput(exchange, metricsMap, books);
