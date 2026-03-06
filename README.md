@@ -96,7 +96,7 @@ The Binance ingestion layer and order book core are production-ready. The subscr
 [DONE]  Prometheus metrics + Grafana dashboard
 [DONE]  Docker Compose deployment
 
-[NEXT]  IExchangeAdapter interface — common contract for all exchanges
+[DONE]  IExchangeAdapter interface — common contract for all exchanges
 [NEXT]  Subscriber WebSocket server — fan-out with per-client backpressure
 [NEXT]  Symbol normalization — canonical names across exchanges
 [ ]     Kraken adapter
