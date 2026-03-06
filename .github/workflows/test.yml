@@ -16,7 +16,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcovr
+          sudo apt-get install -y cmake ninja-build
 
       - name: Install vcpkg
         run: |
@@ -46,21 +46,10 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
 
-      - name: Generate coverage report
-        working-directory: build
-        run: |
-          gcovr -r .. . \
-            --exclude '.*tests/.*' \
-            --exclude '.*vcpkg.*' \
-            --cobertura coverage.xml
-          gcovr -r .. . \
-            --exclude '.*tests/.*' \
-            --exclude '.*vcpkg.*'
-
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: build/coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
-          disable_search: true
+          gcov: true
+          gcov_ignore: "tests/ vcpkg_installed/"
           fail_ci_if_error: false
