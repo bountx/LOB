@@ -16,7 +16,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build
+          sudo apt-get install -y cmake ninja-build lcov
 
       - name: Install vcpkg
         run: |
@@ -46,10 +46,21 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Generate coverage report
+        run: |
+          lcov --capture \
+            --directory build \
+            --base-directory . \
+            --output-file coverage.info \
+            --no-external \
+            --ignore-errors mismatch
+          lcov --remove coverage.info \
+            '*/tests/*' \
+            --output-file coverage.info
+          lcov --list coverage.info
+
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          gcov: true
-          gcov_ignore: "tests/ vcpkg_installed/"
-          fail_ci_if_error: false
+          file: ./coverage.info
+          format: lcov
