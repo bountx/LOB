@@ -1,7 +1,7 @@
 # LOB — Multi-Exchange Order Book Server
 
 [![Tests](https://github.com/bountx/LOB/actions/workflows/test.yml/badge.svg)](https://github.com/bountx/LOB/actions/workflows/test.yml)
-[![Coverage Status](https://coveralls.io/repos/github/bountx/LOB/badge.svg?branch=main&kill_cache=1)](https://coveralls.io/github/bountx/LOB?branch=main&kill_cache=1)
+[![Coverage Status](https://coveralls.io/repos/github/bountx/LOB/badge.svg?branch=main&kill_cache=1)](https://coveralls.io/github/bountx/LOB?branch=main&kill_cache=2)
 
 A self-hosted WebSocket server that connects to multiple crypto exchanges, maintains live limit order books, and re-broadcasts normalized data to any number of subscribers. Run it on a $6 VPS and point your trading scripts, dashboards, or ML pipelines at it.
 
