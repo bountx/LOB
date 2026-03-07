@@ -216,6 +216,10 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         }
 
         metrics.msgCount.fetch_add(1);
+
+        if (updateCallback_) {
+            updateCallback_(exchangeName(), symbol, jsonMsg["b"], jsonMsg["a"], eventTime);
+        }
     } catch (const std::exception& ex) {
         printf("message error: %s\n", ex.what());
     }

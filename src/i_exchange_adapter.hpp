@@ -1,5 +1,7 @@
 #pragma once
+#include <functional>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -12,6 +14,19 @@
 // Each adapter owns its WebSocket connection, snapshot logic, and rate-limit handling.
 class IExchangeAdapter {
 public:
+    // Called after each successful order book update.
+    // exchange: adapter name (e.g. "binance"), symbol: e.g. "BTCUSDT".
+    // bids/asks: JSON arrays of ["price","qty"] changed levels (zero qty = level removed).
+    // ts: event timestamp in milliseconds since epoch.
+    using UpdateCallback =
+        std::function<void(std::string_view exchange, std::string_view symbol,
+                           const nlohmann::json& bids, const nlohmann::json& asks, long long ts)>;
+
+    // Register a callback invoked after each successfully applied book update.
+    // Must be called before start(). Thread-safe: the callback is invoked from the
+    // adapter's internal message-processing thread.
+    void setUpdateCallback(UpdateCallback cb) { updateCallback_ = std::move(cb); }
+
     /**
      * @brief Ensures derived adapters are destroyed correctly when deleted via the interface.
      *
@@ -71,4 +86,6 @@ protected:
      * Allows derived exchange adapter implementations to construct the base interface subobject.
      */
     IExchangeAdapter() = default;
+
+    UpdateCallback updateCallback_;
 };
