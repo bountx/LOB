@@ -132,6 +132,16 @@ TEST(FormatScaled, TypicalBtcPrice) {
     EXPECT_EQ(subscriber::formatScaled(9'450'000'000'000LL), "94500");
 }
 
+TEST(FormatScaled, NegativeWholeNumber) {
+    // -1.0 * 1e8 = -100000000
+    EXPECT_EQ(subscriber::formatScaled(-100'000'000LL), "-1");
+}
+
+TEST(FormatScaled, NegativeSmallFraction) {
+    // -0.5 * 1e8 = -50000000  (intPart=0, so must produce "-0.5" not "0.-5")
+    EXPECT_EQ(subscriber::formatScaled(-50'000'000LL), "-0.5");
+}
+
 // ─── bookLevelsToJson ────────────────────────────────────────────────────────
 
 TEST(BookLevelsToJson, AscendingAsks) {

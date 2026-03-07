@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdlib>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -60,8 +61,10 @@ inline std::optional<ParsedRequest> parseClientMessage(const std::string& msg) {
 // E.g., 5000100000000 → "50001.0", 100000000 → "1", 5000000 → "0.05".
 inline std::string formatScaled(long long scaled) {
     constexpr long long SCALE = 100'000'000LL;
-    long long intPart = scaled / SCALE;
-    long long fracPart = scaled % SCALE;
+    const bool sign = scaled < 0;
+    const long long absScaled = std::llabs(scaled);
+    const long long intPart = absScaled / SCALE;
+    const long long fracPart = absScaled % SCALE;
     std::string result = std::to_string(intPart);
     if (fracPart != 0) {
         std::string frac = std::to_string(fracPart);
@@ -69,6 +72,7 @@ inline std::string formatScaled(long long scaled) {
         while (!frac.empty() && frac.back() == '0') frac.pop_back();
         result += "." + frac;
     }
+    if (sign) result = "-" + result;
     return result;
 }
 
