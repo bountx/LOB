@@ -157,10 +157,11 @@ int main(int argc, char* argv[]) {
         for (const auto& sym : symbols) {
             books.at(sym)->printOrderBookStats();
             const auto& m = *metricsMap.at(sym);
+            const long long sum = m.processingUsSum.load();
             const long long count = m.processingBuckets[10].load();
-            const long long avgUs = count > 0 ? m.processingUsSum.load() / count : 0;
-            printf("[%s] Msgs: %lld  Lag: %lld ms  AvgProc: %lld us  Updates: %lld\n", sym.c_str(),
-                   m.msgCount.load(), m.lastEventLagMs.load(), avgUs, count);
+            const double avgUs = count > 0 ? static_cast<double>(sum) / count : 0.0;
+            printf("[%s] Msgs: %lld  Lag: %lld ms  AvgProc: %.1f us  Updates: %lld\n",
+                   sym.c_str(), m.msgCount.load(), m.lastEventLagMs.load(), avgUs, count);
         }
         printf("--------------------------------------------------\n");
     }

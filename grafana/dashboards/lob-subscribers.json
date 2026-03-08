@@ -307,7 +307,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(lob_subscriber_messages_sent_total[1m]) / sum(rate(lob_messages_total[1m]))",
+          "expr": "rate(lob_subscriber_messages_sent_total[1m]) / clamp_min(sum(rate(lob_messages_total[1m])), 1)",
           "legendFormat": "subscribers per update",
           "refId": "A"
         }

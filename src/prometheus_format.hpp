@@ -23,7 +23,11 @@ inline long long readRssBytes() {
             // "VmRSS:     1234 kB"
             const char* p = line.c_str() + 6;
             while (*p == ' ' || *p == '\t') ++p;
-            return std::stoll(p) * 1024LL;
+            try {
+                return std::stoll(p) * 1024LL;
+            } catch (const std::exception&) {
+                return 0;
+            }
         }
     }
 #endif

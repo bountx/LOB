@@ -165,24 +165,35 @@ public:
         const std::string streamKey = std::string(exchange) + "." + std::string(symbol);
         const std::string msg = subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks);
 
-        // Collect target sockets under the lock, then do I/O outside it.
-        std::vector<std::shared_ptr<ix::WebSocket>> targets;
+        // Collect target sockets with their IDs under the lock, then do I/O outside it.
+        std::vector<std::pair<std::string, std::shared_ptr<ix::WebSocket>>> targets;
         {
             std::lock_guard lock(mu_);
             for (auto& [id, client] : clients_) {
                 if (!client.streams.count(streamKey)) continue;
                 auto ws = client.ws.lock();
-                if (ws) targets.push_back(std::move(ws));
+                if (ws) targets.emplace_back(id, std::move(ws));
             }
         }
-        for (auto& ws : targets) {
+        std::vector<std::string> backpressureIds;
+        for (auto& [id, ws] : targets) {
             if (ws->bufferedAmount() > kBackpressureLimit) {
                 ws->close();
-                backpressureDisconnects_.fetch_add(1, std::memory_order_relaxed);
+                backpressureIds.push_back(id);
             } else {
                 ws->send(msg);
                 messagesSent_.fetch_add(1, std::memory_order_relaxed);
             }
+        }
+        // Remove backpressure-closed clients immediately so getStats() stays consistent.
+        // The async Close callback will call clients_.erase() again, which is a safe no-op.
+        if (!backpressureIds.empty()) {
+            std::lock_guard lock(mu_);
+            for (const auto& id : backpressureIds) {
+                clients_.erase(id);
+            }
+            backpressureDisconnects_.fetch_add(
+                static_cast<long long>(backpressureIds.size()), std::memory_order_relaxed);
         }
     }
 
