@@ -1,6 +1,7 @@
 #pragma once
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -14,7 +15,9 @@
 
 // Reads the process resident set size from /proc/self/status.
 // Returns 0 on non-Linux platforms or if the file cannot be read.
-inline long long readRssBytes() {
+// Returns the process RSS in bytes, or std::nullopt when unavailable (non-Linux,
+// unreadable /proc/self/status, or unparseable VmRSS line).
+inline std::optional<long long> readRssBytes() {
 #ifdef __linux__
     std::ifstream f("/proc/self/status");
     std::string line;
@@ -26,12 +29,12 @@ inline long long readRssBytes() {
             try {
                 return std::stoll(p) * 1024LL;
             } catch (const std::exception&) {
-                return 0;
+                return std::nullopt;
             }
         }
     }
 #endif
-    return 0;
+    return std::nullopt;
 }
 
 // Escapes a Prometheus label value per the text exposition format spec:
@@ -190,10 +193,12 @@ inline std::string buildPrometheusOutput(
         }
     }
 
-    // Process-level memory.
-    ss << "# HELP lob_process_rss_bytes Resident set size of the process in bytes\n";
-    ss << "# TYPE lob_process_rss_bytes gauge\n";
-    ss << "lob_process_rss_bytes " << readRssBytes() << "\n";
+    // Process-level memory — omitted entirely when /proc/self/status is unavailable.
+    if (const auto rss = readRssBytes()) {
+        ss << "# HELP lob_process_rss_bytes Resident set size of the process in bytes\n";
+        ss << "# TYPE lob_process_rss_bytes gauge\n";
+        ss << "lob_process_rss_bytes " << *rss << "\n";
+    }
 
     // Subscriber server stats (injected by MetricsServer when available).
     if (subStats) {

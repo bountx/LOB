@@ -2,7 +2,7 @@
   "title": "LOB Subscribers",
   "uid": "lob-sub-01",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "tags": ["lob", "trading", "subscribers"],
   "timezone": "browser",
@@ -31,7 +31,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_subscriber_connected_clients",
+          "expr": "sum(lob_subscriber_connected_clients)",
           "legendFormat": "Clients",
           "refId": "A"
         }
@@ -69,7 +69,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_subscriber_active_subscriptions",
+          "expr": "sum(lob_subscriber_active_subscriptions)",
           "legendFormat": "Subscriptions",
           "refId": "A"
         }
@@ -103,7 +103,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(lob_subscriber_messages_sent_total[1m])",
+          "expr": "sum(rate(lob_subscriber_messages_sent_total[1m]))",
           "legendFormat": "msg/s",
           "refId": "A"
         }
@@ -130,21 +130,22 @@
     },
     {
       "id": 4,
-      "title": "Backpressure Disconnects",
-      "description": "Clients dropped because their send buffer exceeded 1 MB",
+      "title": "Backpressure Disconnects (last 1h)",
+      "description": "Clients dropped due to a full send buffer in the past hour — non-zero means at least one client couldn't keep up recently",
       "type": "stat",
       "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_subscriber_backpressure_disconnects_total",
-          "legendFormat": "Total",
+          "expr": "sum(increase(lob_subscriber_backpressure_disconnects_total[1h]))",
+          "legendFormat": "Last 1h",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 0,
           "color": { "mode": "thresholds" },
           "thresholds": {
             "mode": "absolute",
@@ -175,7 +176,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_subscriber_connected_clients",
+          "expr": "sum(lob_subscriber_connected_clients)",
           "legendFormat": "Clients",
           "refId": "A"
         }
@@ -210,7 +211,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_subscriber_active_subscriptions",
+          "expr": "sum(lob_subscriber_active_subscriptions)",
           "legendFormat": "Subscriptions",
           "refId": "A"
         }
@@ -237,7 +238,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(lob_subscriber_messages_sent_total[1m])",
+          "expr": "sum(rate(lob_subscriber_messages_sent_total[1m]))",
           "legendFormat": "broadcast msg/s",
           "refId": "A"
         },
@@ -269,7 +270,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(lob_subscriber_backpressure_disconnects_total[1m])",
+          "expr": "sum(rate(lob_subscriber_backpressure_disconnects_total[1m]))",
           "legendFormat": "disconnects/s",
           "refId": "A"
         }
@@ -307,7 +308,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(lob_subscriber_messages_sent_total[1m]) / clamp_min(sum(rate(lob_messages_total[1m])), 1)",
+          "expr": "sum(rate(lob_subscriber_messages_sent_total[1m])) / clamp_min(sum(rate(lob_messages_total[1m])), 1)",
           "legendFormat": "subscribers per update",
           "refId": "A"
         }
@@ -335,7 +336,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_subscriber_messages_sent_total",
+          "expr": "sum(lob_subscriber_messages_sent_total)",
           "legendFormat": "total sent",
           "refId": "A"
         }
