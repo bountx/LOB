@@ -97,10 +97,10 @@ The Binance ingestion layer and order book core are production-ready. The subscr
 [DONE]  Docker Compose deployment
 
 [DONE]  IExchangeAdapter interface — common contract for all exchanges
-[NEXT]  Subscriber WebSocket server — fan-out with per-client backpressure
+[DONE]  Subscriber WebSocket server — fan-out with per-client backpressure
 [NEXT]  Symbol normalization — canonical names across exchanges
-[ ]     Kraken adapter
-[ ]     Coinbase adapter
+[NEXT]     Kraken adapter
+[NEXT]     Coinbase adapter
 [ ]     Unified book (aggregated best prices across exchanges)
 [ ]     Parquet recording — write book snapshots to disk for offline analysis
 [ ]     Python client library — subscribe and get Pandas DataFrames
