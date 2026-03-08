@@ -4,6 +4,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./config.json:/app/config.json:ro
+    ports:
+      - "8765:8765"
     # Port 9090 is only exposed to other containers, not the host.
     # Prometheus scrapes it directly via the internal Docker network.
     healthcheck:
