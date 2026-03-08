@@ -213,7 +213,7 @@ private:
                 clients_[id].streams.insert(key);
             }
 
-            auto it = books_.find(symbol);
+            auto it = books_.find(key);
             if (it != books_.end() && it->second->isSnapshotApplied()) {
                 const long long ts =
                     std::chrono::duration_cast<std::chrono::milliseconds>(
