@@ -95,6 +95,17 @@ std::map<long long, long long, std::greater<>> OrderBook::getBids() const {
 
 bool OrderBook::isSnapshotApplied() const { return snapshotApplied.load(); }
 
+OrderBook::Snapshot OrderBook::getSnapshot() const {
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    Snapshot s;
+    s.applied = snapshotApplied.load();
+    if (s.applied) {
+        s.asks = asks;
+        s.bids = bids;
+    }
+    return s;
+}
+
 OrderBook::Stats OrderBook::getStats() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     Stats s;

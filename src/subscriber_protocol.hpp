@@ -19,7 +19,9 @@ struct ParsedRequest {
  * @brief Parse a stream descriptor of the form "exchange.SYMBOL.book" into exchange and symbol.
  *
  * @param stream Stream descriptor, expected in the format "exchange.SYMBOL.book".
- * @return std::optional<std::pair<std::string, std::string>> Containing {exchange, symbol} when parsing succeeds; `std::nullopt` if the input is not in the expected format, the symbol is empty, or the suffix is not "book".
+ * @return std::optional<std::pair<std::string, std::string>> Containing {exchange, symbol} when
+ * parsing succeeds; `std::nullopt` if the input is not in the expected format, the symbol is empty,
+ * or the suffix is not "book".
  */
 inline std::optional<std::pair<std::string, std::string>> parseStream(const std::string& stream) {
     size_t dot1 = stream.find('.');
@@ -137,11 +139,12 @@ inline nlohmann::json bookLevelsToJson(const std::map<long long, long long, Comp
  * @param timestamp Snapshot timestamp.
  * @param bids JSON array of bid entries, each entry formatted as ["price","qty"] strings.
  * @param asks JSON array of ask entries, each entry formatted as ["price","qty"] strings.
- * @return std::string Serialized JSON object containing the fields: `type` ("snapshot"), `exchange`, `symbol`, `ts`, `bids`, and `asks`.
+ * @return std::string Serialized JSON object containing the fields: `type` ("snapshot"),
+ * `exchange`, `symbol`, `ts`, `bids`, and `asks`.
  */
 inline std::string buildSnapshot(std::string_view exchange, std::string_view symbol,
-                                  long long timestamp, const nlohmann::json& bids,
-                                  const nlohmann::json& asks) {
+                                 long long timestamp, const nlohmann::json& bids,
+                                 const nlohmann::json& asks) {
     nlohmann::json j;
     j["type"] = "snapshot";
     j["exchange"] = exchange;
@@ -159,13 +162,16 @@ inline std::string buildSnapshot(std::string_view exchange, std::string_view sym
  * @param exchange Exchange identifier.
  * @param symbol Trading symbol.
  * @param timestamp Unix timestamp for the update (milliseconds).
- * @param bids JSON array of changed bid levels; each entry is expected in the same format produced by bookLevelsToJson. A level with quantity "0" indicates removal.
- * @param asks JSON array of changed ask levels; each entry is expected in the same format produced by bookLevelsToJson. A level with quantity "0" indicates removal.
- * @return std::string JSON-encoded update message with fields: `type` = "update", `exchange`, `symbol`, `ts`, `bids`, and `asks`.
+ * @param bids JSON array of changed bid levels; each entry is expected in the same format produced
+ * by bookLevelsToJson. A level with quantity "0" indicates removal.
+ * @param asks JSON array of changed ask levels; each entry is expected in the same format produced
+ * by bookLevelsToJson. A level with quantity "0" indicates removal.
+ * @return std::string JSON-encoded update message with fields: `type` = "update", `exchange`,
+ * `symbol`, `ts`, `bids`, and `asks`.
  */
 inline std::string buildUpdate(std::string_view exchange, std::string_view symbol,
-                                long long timestamp, const nlohmann::json& bids,
-                                const nlohmann::json& asks) {
+                               long long timestamp, const nlohmann::json& bids,
+                               const nlohmann::json& asks) {
     nlohmann::json j;
     j["type"] = "update";
     j["exchange"] = exchange;

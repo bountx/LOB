@@ -16,67 +16,76 @@
 class SubscriberServer {
 public:
     // Clients with more than this many bytes queued get disconnected.
-    static constexpr size_t kBackpressureLimit = 1 * 1024 * 1024;  /**
-         * @brief Constructs a SubscriberServer that manages WebSocket subscribers for order book streams.
-         *
-         * Stores a reference to the shared order-book map and configures the server to listen on the
-         * specified TCP port.
-         *
-         * @param books Reference to the map of order books keyed by "exchange.symbol".
-         * @param port TCP port to listen on (default 8765).
-         */
+    static constexpr size_t kBackpressureLimit =
+        1 * 1024 *
+        1024; /**
+               * @brief Constructs a SubscriberServer that manages WebSocket subscribers for order
+               * book streams.
+               *
+               * Stores a reference to the shared order-book map and configures the server to listen
+               * on the specified TCP port.
+               *
+               * @param books Reference to the map of order books keyed by "exchange.symbol".
+               * @param port TCP port to listen on (default 8765).
+               */
 
-    explicit SubscriberServer(
-        std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books, int port = 8765)
+    explicit SubscriberServer(std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
+                              int port = 8765)
         : books_(books), port_(port), server_(port) {}
 
     /**
- * @brief Stops the server and releases associated resources when the instance is destroyed.
- *
- * Ensures the underlying WebSocket server is stopped and internal state is cleaned up before destruction.
- */
-~SubscriberServer() { stop(); }
+     * @brief Stops the server and releases associated resources when the instance is destroyed.
+     *
+     * Ensures the underlying WebSocket server is stopped and internal state is cleaned up before
+     * destruction.
+     */
+    ~SubscriberServer() { stop(); }
 
     /**
- * @brief Disables copy construction of SubscriberServer.
- *
- * Copying a SubscriberServer is not allowed; attempts to copy an instance are prohibited and will fail to compile.
- */
-SubscriberServer(const SubscriberServer&) = delete;
+     * @brief Disables copy construction of SubscriberServer.
+     *
+     * Copying a SubscriberServer is not allowed; attempts to copy an instance are prohibited and
+     * will fail to compile.
+     */
+    SubscriberServer(const SubscriberServer&) = delete;
     /**
- * @brief Deleted copy assignment operator to disable copying of SubscriberServer instances.
- *
- * Copying is disallowed because SubscriberServer manages internal connection state and server resources that must not be duplicated.
- */
-SubscriberServer& operator=(const SubscriberServer&) = delete;
+     * @brief Deleted copy assignment operator to disable copying of SubscriberServer instances.
+     *
+     * Copying is disallowed because SubscriberServer manages internal connection state and server
+     * resources that must not be duplicated.
+     */
+    SubscriberServer& operator=(const SubscriberServer&) = delete;
     /**
- * @brief Disable move construction for SubscriberServer.
- *
- * Prevents transferring ownership of internal resources (connections, server state)
- * by deleting the move constructor.
- */
-SubscriberServer(SubscriberServer&&) = delete;
+     * @brief Disable move construction for SubscriberServer.
+     *
+     * Prevents transferring ownership of internal resources (connections, server state)
+     * by deleting the move constructor.
+     */
+    SubscriberServer(SubscriberServer&&) = delete;
     /**
- * @brief Disable move-assignment for SubscriberServer.
- *
- * Deleting this operator prevents moving a SubscriberServer instance, preserving its non-transferable ownership semantics.
- */
-SubscriberServer& operator=(SubscriberServer&&) = delete;
+     * @brief Disable move-assignment for SubscriberServer.
+     *
+     * Deleting this operator prevents moving a SubscriberServer instance, preserving its
+     * non-transferable ownership semantics.
+     */
+    SubscriberServer& operator=(SubscriberServer&&) = delete;
 
     // Bind and begin serving subscribers in a background thread.
     /**
-     * @brief Starts the WebSocket server and installs connection and message callbacks for new clients.
+     * @brief Starts the WebSocket server and installs connection and message callbacks for new
+     * clients.
      *
-     * When started, incoming connections are tracked and per-connection message handlers are attached.
+     * When started, incoming connections are tracked and per-connection message handlers are
+     * attached.
      *
-     * @return `true` if the server was started successfully or was already running, `false` if binding to the configured port failed.
+     * @return `true` if the server was started successfully or was already running, `false` if
+     * binding to the configured port failed.
      */
     bool start() {
         if (started_) return true;
 
         server_.setOnConnectionCallback(
-            [this](std::weak_ptr<ix::WebSocket> ws,
-                   std::shared_ptr<ix::ConnectionState> state) {
+            [this](std::weak_ptr<ix::WebSocket> ws, std::shared_ptr<ix::ConnectionState> state) {
                 const std::string id = state->getId();
                 {
                     std::lock_guard lock(mu_);
@@ -85,21 +94,19 @@ SubscriberServer& operator=(SubscriberServer&&) = delete;
                 auto sws = ws.lock();
                 if (!sws) return;
 
-                sws->setOnMessageCallback(
-                    [this, ws, id](const ix::WebSocketMessagePtr& msg) {
-                        if (msg->type == ix::WebSocketMessageType::Message) {
-                            onMessage(ws, id, msg->str);
-                        } else if (msg->type == ix::WebSocketMessageType::Close) {
-                            std::lock_guard lock(mu_);
-                            clients_.erase(id);
-                        }
-                    });
+                sws->setOnMessageCallback([this, ws, id](const ix::WebSocketMessagePtr& msg) {
+                    if (msg->type == ix::WebSocketMessageType::Message) {
+                        onMessage(ws, id, msg->str);
+                    } else if (msg->type == ix::WebSocketMessageType::Close) {
+                        std::lock_guard lock(mu_);
+                        clients_.erase(id);
+                    }
+                });
             });
 
         auto [ok, err] = server_.listen();
         if (!ok) {
-            fprintf(stderr, "SubscriberServer: couldn't bind on port %d: %s\n", port_,
-                    err.c_str());
+            fprintf(stderr, "SubscriberServer: couldn't bind on port %d: %s\n", port_, err.c_str());
             return false;
         }
         server_.start();
@@ -110,8 +117,8 @@ SubscriberServer& operator=(SubscriberServer&&) = delete;
     /**
      * @brief Stops the subscriber server and marks it as not started.
      *
-     * If the server is running, shuts down the underlying WebSocket server and updates internal state.
-     * Calling this when the server is not started has no effect.
+     * If the server is running, shuts down the underlying WebSocket server and updates internal
+     * state. Calling this when the server is not started has no effect.
      */
     void stop() {
         if (started_) {
@@ -122,10 +129,12 @@ SubscriberServer& operator=(SubscriberServer&&) = delete;
 
     // Fan out an incremental update to all clients subscribed to exchange.SYMBOL.
     /**
-     * @brief Sends an incremental order-book update to all clients subscribed to the given exchange.symbol stream.
+     * @brief Sends an incremental order-book update to all clients subscribed to the given
+     * exchange.symbol stream.
      *
-     * Sends a preformatted update message for the specified exchange and symbol to every connected client that
-     * has subscribed to that stream; may close a client's WebSocket if its send buffer exceeds the backpressure limit.
+     * Sends a preformatted update message for the specified exchange and symbol to every connected
+     * client that has subscribed to that stream; may close a client's WebSocket if its send buffer
+     * exceeds the backpressure limit.
      *
      * @param exchange Exchange identifier (e.g., "binance").
      * @param symbol Trading symbol (e.g., "BTCUSDT").
@@ -139,16 +148,22 @@ SubscriberServer& operator=(SubscriberServer&&) = delete;
         const std::string streamKey = std::string(exchange) + "." + std::string(symbol);
         const std::string msg = subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks);
 
-        std::lock_guard lock(mu_);
-        for (auto& [id, client] : clients_) {
-            if (!client.streams.count(streamKey)) continue;
-            auto ws = client.ws.lock();
-            if (!ws) continue;
+        // Collect target sockets under the lock, then do I/O outside it.
+        std::vector<std::shared_ptr<ix::WebSocket>> targets;
+        {
+            std::lock_guard lock(mu_);
+            for (auto& [id, client] : clients_) {
+                if (!client.streams.count(streamKey)) continue;
+                auto ws = client.ws.lock();
+                if (ws) targets.push_back(std::move(ws));
+            }
+        }
+        for (auto& ws : targets) {
             if (ws->bufferedAmount() > kBackpressureLimit) {
                 ws->close();
-                continue;
+            } else {
+                ws->send(msg);
             }
-            ws->send(msg);
         }
     }
 
@@ -189,13 +204,15 @@ private:
     /**
      * @brief Register a client's subscriptions and emit initial snapshots when available.
      *
-     * Validates each requested stream, adds the "exchange.symbol" key to the client's subscription set,
-     * sends an error message to the client for any malformed stream, and — if an OrderBook for the
-     * symbol exists and has a snapshot applied — sends the current snapshot for that exchange/symbol.
+     * Validates each requested stream, adds the "exchange.symbol" key to the client's subscription
+     * set, sends an error message to the client for any malformed stream, and — if an OrderBook for
+     * the symbol exists and has a snapshot applied — sends the current snapshot for that
+     * exchange/symbol.
      *
      * @param ws Shared pointer to the client's WebSocket connection.
      * @param id Client identifier used to track subscriptions.
-     * @param streams Vector of stream strings to subscribe to; each string is expected in "exchange.symbol" form.
+     * @param streams Vector of stream strings to subscribe to; each string is expected in
+     * "exchange.symbol" form.
      */
     void handleSubscribe(std::shared_ptr<ix::WebSocket> ws, const std::string& id,
                          const std::vector<std::string>& streams) {
@@ -214,14 +231,16 @@ private:
             }
 
             auto it = books_.find(key);
-            if (it != books_.end() && it->second->isSnapshotApplied()) {
-                const long long ts =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::system_clock::now().time_since_epoch())
-                        .count();
-                auto bids = subscriber::bookLevelsToJson(it->second->getBids());
-                auto asks = subscriber::bookLevelsToJson(it->second->getAsks());
-                ws->send(subscriber::buildSnapshot(exchange, symbol, ts, bids, asks));
+            if (it != books_.end()) {
+                auto snap = it->second->getSnapshot();
+                if (snap.applied) {
+                    const long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::system_clock::now().time_since_epoch())
+                                             .count();
+                    auto snap_bids = subscriber::bookLevelsToJson(snap.bids);
+                    auto snap_asks = subscriber::bookLevelsToJson(snap.asks);
+                    ws->send(subscriber::buildSnapshot(exchange, symbol, ts, snap_bids, snap_asks));
+                }
             }
         }
     }

@@ -38,15 +38,13 @@ TEST(ParseStream, NoDot) {
     EXPECT_FALSE(subscriber::parseStream("binanceBTCUSDTbook").has_value());
 }
 
-TEST(ParseStream, EmptyString) {
-    EXPECT_FALSE(subscriber::parseStream("").has_value());
-}
+TEST(ParseStream, EmptyString) { EXPECT_FALSE(subscriber::parseStream("").has_value()); }
 
 // ─── parseClientMessage ──────────────────────────────────────────────────────
 
 TEST(ParseClientMessage, ValidSubscribe) {
-    auto result = subscriber::parseClientMessage(
-        R"({"op":"subscribe","streams":["binance.BTCUSDT.book"]})");
+    auto result =
+        subscriber::parseClientMessage(R"({"op":"subscribe","streams":["binance.BTCUSDT.book"]})");
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->op, "subscribe");
     ASSERT_EQ(result->streams.size(), 1u);
@@ -75,8 +73,7 @@ TEST(ParseClientMessage, EmptyStreams) {
 }
 
 TEST(ParseClientMessage, UnknownOp) {
-    EXPECT_FALSE(
-        subscriber::parseClientMessage(R"({"op":"ping","streams":[]})").has_value());
+    EXPECT_FALSE(subscriber::parseClientMessage(R"({"op":"ping","streams":[]})").has_value());
 }
 
 TEST(ParseClientMessage, MissingOp) {
@@ -118,9 +115,7 @@ TEST(FormatScaled, SmallFraction) {
     EXPECT_EQ(subscriber::formatScaled(1LL), "0.00000001");
 }
 
-TEST(FormatScaled, Zero) {
-    EXPECT_EQ(subscriber::formatScaled(0LL), "0");
-}
+TEST(FormatScaled, Zero) { EXPECT_EQ(subscriber::formatScaled(0LL), "0"); }
 
 TEST(FormatScaled, TrailingZerosTrimmed) {
     // 1.50000000 * 1e8 = 150000000
@@ -147,14 +142,14 @@ TEST(FormatScaled, NegativeSmallFraction) {
  *
  * @param levels Map whose keys are prices scaled by 1e8 and whose values are sizes scaled by 1e8.
  * @return nlohmann::json An array where each element is a two-element array `[price, size]`:
- *         both `price` and `size` are decimal strings produced from the corresponding scaled integers;
- *         elements appear in the same iteration order as `levels`.
+ *         both `price` and `size` are decimal strings produced from the corresponding scaled
+ * integers; elements appear in the same iteration order as `levels`.
  */
 
 TEST(BookLevelsToJson, AscendingAsks) {
     std::map<long long, long long, std::less<>> asks;
-    asks[5'000'100'000'000LL] = 150'000'000LL;   // 50001.0 @ 1.5
-    asks[5'000'200'000'000LL] = 50'000'000LL;    // 50002.0 @ 0.5
+    asks[5'000'100'000'000LL] = 150'000'000LL;  // 50001.0 @ 1.5
+    asks[5'000'200'000'000LL] = 50'000'000LL;   // 50002.0 @ 0.5
 
     auto j = subscriber::bookLevelsToJson(asks);
     ASSERT_EQ(j.size(), 2u);
@@ -194,7 +189,8 @@ TEST(BookLevelsToJson, EmptyBook) {
  * @param ts Timestamp in milliseconds since epoch.
  * @param bids JSON array of bid entries where each entry is [price, size] as strings.
  * @param asks JSON array of ask entries where each entry is [price, size] as strings.
- * @return std::string Serialized JSON snapshot containing fields: type, exchange, symbol, ts, bids, asks.
+ * @return std::string Serialized JSON snapshot containing fields: type, exchange, symbol, ts, bids,
+ * asks.
  */
 
 TEST(BuildSnapshot, CorrectStructure) {
@@ -239,7 +235,8 @@ TEST(BuildUpdate, CorrectStructure) {
  * @brief Constructs a JSON-formatted error message.
  *
  * @param message Human-readable error description to include in the JSON.
- * @return std::string Raw JSON string containing an object with "type" set to "error" and "message" set to the provided message.
+ * @return std::string Raw JSON string containing an object with "type" set to "error" and "message"
+ * set to the provided message.
  */
 
 TEST(BuildError, CorrectStructure) {

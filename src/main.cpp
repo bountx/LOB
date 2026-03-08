@@ -132,11 +132,11 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "couldn't bind subscriber server on port 8765\n");
         return -1;
     }
-    adapter.setUpdateCallback(
-        [&subServer](std::string_view exchange, std::string_view symbol,
-                     const nlohmann::json& bids, const nlohmann::json& asks, long long ts) {
-            subServer.broadcastUpdate(exchange, symbol, bids, asks, ts);
-        });
+    adapter.setUpdateCallback([&subServer](std::string_view exchange, std::string_view symbol,
+                                           const nlohmann::json& bids, const nlohmann::json& asks,
+                                           long long ts) {
+        subServer.broadcastUpdate(exchange, symbol, bids, asks, ts);
+    });
 
     printf("metrics at http://0.0.0.0:9090/metrics\n");
     printf("subscribers at ws://0.0.0.0:8765\n");
