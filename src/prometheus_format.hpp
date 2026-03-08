@@ -1,4 +1,5 @@
 #pragma once
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -9,6 +10,25 @@
 
 #include "metrics.hpp"
 #include "order_book.hpp"
+#include "subscriber_stats.hpp"
+
+// Reads the process resident set size from /proc/self/status.
+// Returns 0 on non-Linux platforms or if the file cannot be read.
+inline long long readRssBytes() {
+#ifdef __linux__
+    std::ifstream f("/proc/self/status");
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.compare(0, 6, "VmRSS:") == 0) {
+            // "VmRSS:     1234 kB"
+            const char* p = line.c_str() + 6;
+            while (*p == ' ' || *p == '\t') ++p;
+            return std::stoll(p) * 1024LL;
+        }
+    }
+#endif
+    return 0;
+}
 
 // Escapes a Prometheus label value per the text exposition format spec:
 /**
@@ -53,25 +73,26 @@ inline std::string escapeLabelValue(std::string_view v) {
  * Emits the following metrics when available:
  * - lob_messages_total
  * - lob_event_lag_milliseconds
- * - lob_processing_time_microseconds
- * - lob_max_processing_time_microseconds
+ * - lob_processing_time_microseconds (histogram: _bucket, _sum, _count)
  * - lob_orderbook_asks_count
  * - lob_orderbook_bids_count
  * - lob_orderbook_best_ask_price (only for positive best-ask)
  * - lob_orderbook_best_bid_price (only for positive best-bid)
  * - lob_orderbook_spread_price (only when both best-ask and best-bid are positive)
+ * - lob_process_rss_bytes (process RSS)
+ * - lob_subscriber_* (when subStats is non-null)
  *
  * @param exchange Identifier for the adapter; used as the `exchange` label value.
  * @param metricsMap Map from symbol to Metrics; used for message counts and processing/lag values.
- * @param books Map from symbol to OrderBook; used to obtain per-symbol order book stats (asks/bids
- * counts, best prices).
+ * @param books Map from symbol to OrderBook; used to obtain per-symbol order book stats.
+ * @param subStats Optional subscriber server stats; omitted from output when null.
  * @return std::string Prometheus exposition text including HELP/TYPE headers and metric lines.
- * Best-price and spread metrics are omitted when price values are not positive.
  */
 inline std::string buildPrometheusOutput(
     std::string_view exchange,
     const std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
-    const std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books) {
+    const std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
+    const SubscriberStats* subStats = nullptr) {
     std::ostringstream ss;
 
     auto writeCounterHeader = [&](const char* name, const char* help) {
@@ -94,21 +115,31 @@ inline std::string buildPrometheusOutput(
 
     writeGaugeHeader("lob_event_lag_milliseconds", "Last event lag in milliseconds");
     for (const auto& [sym, m] : metricsMap) {
-        writeLine("lob_event_lag_milliseconds", sym, static_cast<double>(m->lastEventLagMs.load()));
+        writeLine("lob_event_lag_milliseconds", sym,
+                  static_cast<double>(m->lastEventLagMs.load()));
     }
 
-    writeGaugeHeader("lob_processing_time_microseconds",
-                     "Last update processing time in microseconds");
+    // Processing time histogram — _bucket, _sum, _count per symbol.
+    ss << "# HELP lob_processing_time_microseconds"
+          " Time to process one order book update in microseconds\n";
+    ss << "# TYPE lob_processing_time_microseconds histogram\n";
     for (const auto& [sym, m] : metricsMap) {
-        writeLine("lob_processing_time_microseconds", sym,
-                  static_cast<double>(m->lastProcessingUs.load()));
-    }
-
-    writeGaugeHeader("lob_max_processing_time_microseconds",
-                     "Maximum observed processing time in microseconds");
-    for (const auto& [sym, m] : metricsMap) {
-        writeLine("lob_max_processing_time_microseconds", sym,
-                  static_cast<double>(m->maxProcessingUs.load()));
+        const std::string exch = escapeLabelValue(exchange);
+        const std::string symEsc = escapeLabelValue(sym);
+        // Build the shared label prefix (without closing brace).
+        const std::string base =
+            "{exchange=\"" + exch + "\",symbol=\"" + symEsc + "\"";
+        for (int i = 0; i < 10; ++i) {
+            ss << "lob_processing_time_microseconds_bucket" << base << ",le=\""
+               << Metrics::kBucketBounds[i] << "\"} "
+               << m->processingBuckets[i].load() << "\n";
+        }
+        ss << "lob_processing_time_microseconds_bucket" << base
+           << ",le=\"+Inf\"} " << m->processingBuckets[10].load() << "\n";
+        ss << "lob_processing_time_microseconds_sum" << base << "} "
+           << m->processingUsSum.load() << "\n";
+        ss << "lob_processing_time_microseconds_count" << base << "} "
+           << m->processingBuckets[10].load() << "\n";
     }
 
     // Collect stats once per symbol to avoid locking each book multiple times.
@@ -156,6 +187,35 @@ inline std::string buildPrometheusOutput(
                 writeLine("lob_orderbook_spread_price", sym, spread);
             }
         }
+    }
+
+    // Process-level memory.
+    ss << "# HELP lob_process_rss_bytes Resident set size of the process in bytes\n";
+    ss << "# TYPE lob_process_rss_bytes gauge\n";
+    ss << "lob_process_rss_bytes " << readRssBytes() << "\n";
+
+    // Subscriber server stats (injected by MetricsServer when available).
+    if (subStats) {
+        ss << "# HELP lob_subscriber_connected_clients"
+              " Current number of connected WebSocket subscriber clients\n";
+        ss << "# TYPE lob_subscriber_connected_clients gauge\n";
+        ss << "lob_subscriber_connected_clients " << subStats->connectedClients << "\n";
+
+        ss << "# HELP lob_subscriber_active_subscriptions"
+              " Total active stream subscriptions across all connected clients\n";
+        ss << "# TYPE lob_subscriber_active_subscriptions gauge\n";
+        ss << "lob_subscriber_active_subscriptions " << subStats->activeSubscriptions << "\n";
+
+        ss << "# HELP lob_subscriber_messages_sent_total"
+              " Total messages broadcast to subscriber clients\n";
+        ss << "# TYPE lob_subscriber_messages_sent_total counter\n";
+        ss << "lob_subscriber_messages_sent_total " << subStats->messagesSentTotal << "\n";
+
+        ss << "# HELP lob_subscriber_backpressure_disconnects_total"
+              " Clients disconnected because their send buffer exceeded the backpressure limit\n";
+        ss << "# TYPE lob_subscriber_backpressure_disconnects_total counter\n";
+        ss << "lob_subscriber_backpressure_disconnects_total "
+           << subStats->backpressureDisconnectsTotal << "\n";
     }
 
     return ss.str();

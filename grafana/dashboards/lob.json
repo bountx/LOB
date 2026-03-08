@@ -1,8 +1,8 @@
 {
-  "title": "LOB Performance",
+  "title": "LOB Ingest Pipeline",
   "uid": "lob-perf-01",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "tags": ["lob", "trading", "performance"],
   "timezone": "browser",
@@ -10,7 +10,15 @@
   "timepicker": {},
   "graphTooltip": 1,
   "fiscalYearStartMonth": 0,
-  "links": [],
+  "links": [
+    {
+      "title": "Subscribers",
+      "url": "/d/lob-sub-01",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": false
+    }
+  ],
   "annotations": { "list": [] },
   "templating": {
     "list": [
@@ -81,19 +89,19 @@
     {
       "id": 2,
       "title": "Event Lag",
-      "description": "Worst-case lag per exchange, with selected symbol overlaid for comparison",
+      "description": "Worst-case lag per exchange (exchange event timestamp vs local receive time)",
       "type": "timeseries",
       "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "max by(exchange) (lob_event_lag_milliseconds)",
-          "legendFormat": "{{exchange}} worst lag ms",
+          "legendFormat": "{{exchange}} worst lag",
           "refId": "A"
         },
         {
           "expr": "lob_event_lag_milliseconds{exchange=~\"$exchange\",symbol=\"$symbol\"}",
-          "legendFormat": "{{exchange}} {{symbol}} lag ms",
+          "legendFormat": "{{exchange}} {{symbol}} lag",
           "refId": "B"
         }
       ],
@@ -121,25 +129,30 @@
     {
       "id": 3,
       "title": "Update Processing Time",
-      "description": "Avg and worst-case processing time across all symbols, with selected symbol overlaid",
+      "description": "p50 / p95 / p99 and mean time to apply one order book update (histogram)",
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "avg(lob_processing_time_microseconds)",
-          "legendFormat": "avg µs (all)",
+          "expr": "histogram_quantile(0.50, sum by(le, exchange, symbol) (rate(lob_processing_time_microseconds_bucket{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "max(lob_max_processing_time_microseconds)",
-          "legendFormat": "max µs (all)",
+          "expr": "histogram_quantile(0.95, sum by(le, exchange, symbol) (rate(lob_processing_time_microseconds_bucket{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "lob_processing_time_microseconds{exchange=~\"$exchange\",symbol=\"$symbol\"}",
-          "legendFormat": "{{symbol}} µs",
+          "expr": "histogram_quantile(0.99, sum by(le, exchange, symbol) (rate(lob_processing_time_microseconds_bucket{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "legendFormat": "p99",
           "refId": "C"
+        },
+        {
+          "expr": "rate(lob_processing_time_microseconds_sum{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m]) / rate(lob_processing_time_microseconds_count{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])",
+          "legendFormat": "mean",
+          "refId": "D"
         }
       ],
       "fieldConfig": {
@@ -258,41 +271,73 @@
     },
     {
       "id": 7,
+      "title": "Process RAM (RSS)",
+      "description": "Resident set size — physical memory pages currently mapped by the process",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "lob_process_rss_bytes",
+          "legendFormat": "RSS",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 8,
       "title": "Current Stats",
-      "description": "Live snapshot of key metrics",
+      "description": "Live snapshot of key ingest metrics",
       "type": "stat",
-      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 4 },
+      "gridPos": { "x": 0, "y": 32, "w": 24, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "sum(lob_messages_total)",
-          "legendFormat": "Total Messages (all)",
+          "legendFormat": "Total Messages",
           "refId": "A"
         },
         {
           "expr": "max by(exchange) (lob_event_lag_milliseconds)",
-          "legendFormat": "Event Lag (ms)",
+          "legendFormat": "Event Lag",
           "refId": "B"
         },
         {
-          "expr": "avg(lob_processing_time_microseconds)",
-          "legendFormat": "Avg Processing (µs)",
+          "expr": "rate(lob_processing_time_microseconds_sum{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m]) / rate(lob_processing_time_microseconds_count{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])",
+          "legendFormat": "Avg Processing",
           "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by(le, exchange, symbol) (rate(lob_processing_time_microseconds_bucket{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "legendFormat": "p99 Processing",
+          "refId": "D"
         },
         {
           "expr": "lob_orderbook_best_ask_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Ask",
-          "refId": "D"
-        },
-        {
-          "expr": "lob_orderbook_best_bid_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
-          "legendFormat": "Best Bid",
           "refId": "E"
         },
         {
           "expr": "lob_orderbook_spread_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Spread",
           "refId": "F"
+        },
+        {
+          "expr": "lob_process_rss_bytes",
+          "legendFormat": "RSS",
+          "refId": "G"
         }
       ],
       "fieldConfig": {
@@ -310,20 +355,38 @@
             "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 2 }]
           },
           {
-            "matcher": { "id": "byName", "options": "Best Bid" },
-            "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 2 }]
-          },
-          {
             "matcher": { "id": "byName", "options": "Spread" },
             "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 4 }]
           },
           {
-            "matcher": { "id": "byName", "options": "Event Lag (ms)" },
-            "properties": [{ "id": "unit", "value": "ms" }]
+            "matcher": { "id": "byName", "options": "Event Lag" },
+            "properties": [
+              { "id": "unit", "value": "ms" },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 100 },
+                { "color": "red", "value": 500 }
+              ]}}
+            ]
           },
           {
-            "matcher": { "id": "byName", "options": "Processing (µs)" },
+            "matcher": { "id": "byName", "options": "Avg Processing" },
             "properties": [{ "id": "unit", "value": "µs" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p99 Processing" },
+            "properties": [
+              { "id": "unit", "value": "µs" },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 500 },
+                { "color": "red", "value": 2000 }
+              ]}}
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "RSS" },
+            "properties": [{ "id": "unit", "value": "bytes" }]
           }
         ]
       },
@@ -331,7 +394,7 @@
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "orientation": "auto",
         "textMode": "auto",
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "auto"
       }

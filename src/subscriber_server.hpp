@@ -1,6 +1,7 @@
 #pragma once
 #include <ixwebsocket/IXWebSocketServer.h>
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -12,6 +13,7 @@
 #include "nlohmann/json.hpp"
 #include "order_book.hpp"
 #include "subscriber_protocol.hpp"
+#include "subscriber_stats.hpp"
 
 class SubscriberServer {
 public:
@@ -127,6 +129,21 @@ public:
         }
     }
 
+    // Returns a snapshot of subscriber server counters for the metrics scrape.
+    SubscriberStats getStats() const {
+        SubscriberStats s;
+        {
+            std::lock_guard lock(mu_);
+            s.connectedClients = static_cast<long long>(clients_.size());
+            for (const auto& [id, client] : clients_) {
+                s.activeSubscriptions += static_cast<long long>(client.streams.size());
+            }
+        }
+        s.messagesSentTotal = messagesSent_.load();
+        s.backpressureDisconnectsTotal = backpressureDisconnects_.load();
+        return s;
+    }
+
     // Fan out an incremental update to all clients subscribed to exchange.SYMBOL.
     /**
      * @brief Sends an incremental order-book update to all clients subscribed to the given
@@ -161,8 +178,10 @@ public:
         for (auto& ws : targets) {
             if (ws->bufferedAmount() > kBackpressureLimit) {
                 ws->close();
+                backpressureDisconnects_.fetch_add(1, std::memory_order_relaxed);
             } else {
                 ws->send(msg);
+                messagesSent_.fetch_add(1, std::memory_order_relaxed);
             }
         }
     }
@@ -272,4 +291,6 @@ private:
     std::unordered_map<std::string, ClientState> clients_;
     ix::WebSocketServer server_;
     bool started_ = false;
+    std::atomic<long long> messagesSent_{0};
+    std::atomic<long long> backpressureDisconnects_{0};
 };

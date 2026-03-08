@@ -1,6 +1,7 @@
 #pragma once
 #include <httplib.h>
 
+#include <functional>
 #include <future>
 #include <memory>
 #include <sstream>
@@ -12,6 +13,7 @@
 #include "metrics.hpp"
 #include "order_book.hpp"
 #include "prometheus_format.hpp"
+#include "subscriber_stats.hpp"
 
 class MetricsServer {
 public:
@@ -28,8 +30,10 @@ public:
     MetricsServer(std::string_view exchange,
                   std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
                   std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
-                  int port = 9090)
-        : exchange(exchange), metricsMap(metricsMap), books(books), port(port) {}
+                  int port = 9090,
+                  std::function<SubscriberStats()> subStatsFn = nullptr)
+        : exchange(exchange), metricsMap(metricsMap), books(books), port(port),
+          subStatsFn_(std::move(subStatsFn)) {}
 
     /**
      * @brief Stop the internal HTTP server and join the worker thread.
@@ -91,13 +95,20 @@ private:
      * format).
      */
     std::string buildPrometheusMetrics() {
-        return buildPrometheusOutput(exchange, metricsMap, books);
+        SubscriberStats subStats;
+        const SubscriberStats* subStatsPtr = nullptr;
+        if (subStatsFn_) {
+            subStats = subStatsFn_();
+            subStatsPtr = &subStats;
+        }
+        return buildPrometheusOutput(exchange, metricsMap, books, subStatsPtr);
     }
 
     std::string exchange;
     std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap;
     std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books;
     int port;
+    std::function<SubscriberStats()> subStatsFn_;
     httplib::Server svr;
     std::thread thread;
     bool started = false;
