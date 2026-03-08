@@ -13,8 +13,6 @@
 #include "order_book.hpp"
 #include "subscriber_stats.hpp"
 
-// Reads the process resident set size from /proc/self/status.
-// Returns 0 on non-Linux platforms or if the file cannot be read.
 // Returns the process RSS in bytes, or std::nullopt when unavailable (non-Linux,
 // unreadable /proc/self/status, or unparseable VmRSS line).
 inline std::optional<long long> readRssBytes() {
