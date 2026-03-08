@@ -23,6 +23,10 @@ public:
 
     void applySnapshot(const nlohmann::json& snapshot);
     bool applyUpdate(const nlohmann::json& update);
+    // Apply bid/ask deltas directly without sequence checking.
+    // bids/asks are JSON arrays of ["price", "qty"] string pairs; zero qty removes the level.
+    // Does not modify snapshotApplied or lastUpdateId.
+    void applyDelta(const nlohmann::json& bids, const nlohmann::json& asks);
     void clear();
     long long getLastUpdateId() const;
     bool isSnapshotApplied() const;

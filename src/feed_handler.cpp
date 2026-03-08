@@ -22,7 +22,8 @@ constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
  * @param updateIntervalMs Milliseconds between depth update snapshots; must be either 100 or 1000.
  * @throws std::invalid_argument if `updateIntervalMs` is not 100 or 1000.
  */
-BinanceAdapter::BinanceAdapter(int updateIntervalMs) : updateIntervalMs(updateIntervalMs) {
+BinanceAdapter::BinanceAdapter(int updateIntervalMs)
+    : updateIntervalMs(updateIntervalMs), normalizer_(defaultNormalizer()) {
     if (updateIntervalMs != 100 && updateIntervalMs != 1000) {
         throw std::invalid_argument("BinanceAdapter: updateIntervalMs must be 100 or 1000, got " +
                                     std::to_string(updateIntervalMs));
@@ -66,13 +67,14 @@ void BinanceAdapter::stop() {
  * @return `true` if the snapshot was applied and all buffered updates were successfully replayed;
  * `false` otherwise.
  */
-bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook,
+bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
+                                           const std::string& canonical, OrderBook& orderBook,
                                            std::stop_token stoken) {
     ix::HttpClient httpClient;
     auto args = std::make_shared<ix::HttpRequestArgs>();
     args->connectTimeout = 5;
     args->transferTimeout = 30;
-    const std::string url = "https://api.binance.com/api/v3/depth?symbol=" + symbol +
+    const std::string url = "https://api.binance.com/api/v3/depth?symbol=" + binanceSym +
                             "&limit=" + std::to_string(snapshotDepth);
     auto response = httpClient.get(url, args);
     if (response->statusCode == 429) {
@@ -84,19 +86,20 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook&
             } catch (...) {
             }
         }
-        fprintf(stderr, "[%s] got 429, waiting %ds before retry\n", symbol.c_str(), retryAfterSec);
+        fprintf(stderr, "[%s] got 429, waiting %ds before retry\n", canonical.c_str(),
+                retryAfterSec);
         std::unique_lock<std::mutex> lock(resyncMutex);
         resyncCv.wait_for(lock, stoken, std::chrono::seconds(retryAfterSec), [] { return false; });
         return false;
     }
     if (response->statusCode == 418) {
-        fprintf(stderr, "[%s] IP banned (418), waiting 120s\n", symbol.c_str());
+        fprintf(stderr, "[%s] IP banned (418), waiting 120s\n", canonical.c_str());
         std::unique_lock<std::mutex> lock(resyncMutex);
         resyncCv.wait_for(lock, stoken, std::chrono::seconds(120), [] { return false; });
         return false;
     }
     if (response->statusCode != 200) {
-        fprintf(stderr, "[%s] snapshot fetch failed: HTTP %d\n", symbol.c_str(),
+        fprintf(stderr, "[%s] snapshot fetch failed: HTTP %d\n", canonical.c_str(),
                 response->statusCode);
         return false;
     }
@@ -109,17 +112,18 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& symbol, OrderBook&
         // a live update while we are still draining the pre-snapshot buffer.
         std::lock_guard<std::mutex> lock(bufferMutex);
         orderBook.applySnapshot(snapshot);
-        for (const auto& msg : symbolBuffers[symbol]) {
+        for (const auto& msg : symbolBuffers[canonical]) {
             if (!orderBook.applyUpdate(msg)) {
-                fprintf(stderr, "[%s] buffered message out of order, resyncing\n", symbol.c_str());
-                symbolBuffers[symbol].clear();
+                fprintf(stderr, "[%s] buffered message out of order, resyncing\n",
+                        canonical.c_str());
+                symbolBuffers[canonical].clear();
                 return false;
             }
         }
-        symbolBuffers[symbol].clear();
+        symbolBuffers[canonical].clear();
         return true;
     } catch (const std::exception& e) {
-        fprintf(stderr, "[%s] snapshot error: %s\n", symbol.c_str(), e.what());
+        fprintf(stderr, "[%s] snapshot error: %s\n", canonical.c_str(), e.what());
         return false;
     }
 }
@@ -162,23 +166,30 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
 
         // Combo stream wraps each message: {"stream":"btcusdt@depth","data":{...}}
         auto outer = nlohmann::json::parse(msg->str);
-        const std::string symbol = streamToSymbol(outer["stream"].get<std::string>());
+        const std::string binanceSym = streamToSymbol(outer["stream"].get<std::string>());
         const auto& jsonMsg = outer["data"];
 
-        auto booksIt = books->find(symbol);
-        auto metricsIt = metricsMap->find(symbol);
-        if (booksIt == books->end() || metricsIt == metricsMap->end()) {
+        // Translate Binance-specific symbol to canonical (e.g. "BTCUSDT" → "BTC-USDT").
+        auto canonIt = binanceToCanonical_.find(binanceSym);
+        if (canonIt == binanceToCanonical_.end()) {
             return;  // unknown symbol
+        }
+        const std::string& sym = canonIt->second;  // canonical
+
+        auto booksIt = books->find(sym);
+        auto metricsIt = metricsMap->find(sym);
+        if (booksIt == books->end() || metricsIt == metricsMap->end()) {
+            return;
         }
         OrderBook& book = *booksIt->second;
         Metrics& metrics = *metricsIt->second;
 
-        // Buffer until snapshot is applied for this symbol
+        // Buffer until snapshot is applied for this symbol (keyed by canonical).
         {
             std::lock_guard<std::mutex> lock(bufferMutex);
             if (!book.isSnapshotApplied()) {
-                if (symbolBuffers[symbol].size() < kMaxBufferedMsgsPerSymbol) {
-                    symbolBuffers[symbol].push_back(jsonMsg);
+                if (symbolBuffers[sym].size() < kMaxBufferedMsgsPerSymbol) {
+                    symbolBuffers[sym].push_back(jsonMsg);
                 }
                 return;
             }
@@ -192,15 +203,15 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         metrics.lastEventLagMs.store(now - eventTime);
 
         if (!book.applyUpdate(jsonMsg)) {
-            printf("[%s] missed updates, resyncing\n", symbol.c_str());
+            printf("[%s] missed updates, resyncing\n", sym.c_str());
             book.clear();
             {
                 std::lock_guard<std::mutex> lock(bufferMutex);
-                symbolBuffers[symbol].clear();
+                symbolBuffers[sym].clear();
             }
             {
                 std::lock_guard<std::mutex> lock(resyncMutex);
-                resyncQueue.push(symbol);
+                resyncQueue.push(sym);  // canonical symbol in queue
             }
             resyncCv.notify_one();
             return;
@@ -212,7 +223,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         metrics.msgCount.fetch_add(1);
 
         if (updateCallback_) {
-            updateCallback_(exchangeName(), symbol, jsonMsg["b"], jsonMsg["a"], eventTime);
+            updateCallback_(exchangeName(), sym, jsonMsg["b"], jsonMsg["a"], eventTime);
         }
     } catch (const std::exception& ex) {
         printf("message error: %s\n", ex.what());
@@ -244,9 +255,11 @@ void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token sto
             symbol = resyncQueue.front();
             resyncQueue.pop();
         }
+        // symbol here is canonical (e.g. "BTC-USDT"); convert to Binance for REST URL.
+        auto binanceSym = normalizer_.fromCanonical("binance", symbol).value_or(symbol);
         for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
             printf("[%s] resyncing (attempt %d/%d)\n", symbol.c_str(), attempt, maxSnapshotRetries);
-            if (fetchAndApplySnapshot(symbol, *books->at(symbol), stoken)) {
+            if (fetchAndApplySnapshot(binanceSym, symbol, *books->at(symbol), stoken)) {
                 break;
             }
             if (stoken.stop_requested()) {
@@ -304,13 +317,20 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
                            std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,
                            std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
                            int snapshotDepthArg, int maxSnapshotRetries) {
-    for (const auto& sym : symbols) {
-        if (booksRef.find(sym) == booksRef.end() ||
-            metricsMapRef.find(sym) == metricsMapRef.end()) {
+    // symbols are in canonical BASE-QUOTE format (e.g. "BTC-USDT").
+    // Build binanceToCanonical_ map and validate all symbols have book/metrics entries.
+    binanceToCanonical_.clear();
+    for (const auto& canonical : symbols) {
+        if (booksRef.find(canonical) == booksRef.end() ||
+            metricsMapRef.find(canonical) == metricsMapRef.end()) {
             fprintf(stderr, "BinanceAdapter::start: symbol '%s' missing from books or metricsMap\n",
-                    sym.c_str());
+                    canonical.c_str());
             return false;
         }
+        // fromCanonical("binance", "BTC-USDT") → "BTCUSDT" via auto-rule (always succeeds).
+        std::string binanceSym =
+            normalizer_.fromCanonical("binance", canonical).value_or(canonical);
+        binanceToCanonical_[binanceSym] = canonical;
     }
 
     books = &booksRef;
@@ -329,10 +349,12 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
         wsConnected = false;
     }
 
-    // Build the combo stream URL from the symbol list.
+    // Build the combo stream URL using Binance-specific symbols (lowercase).
     std::string urlStreams;
-    for (const auto& sym : symbols) {
-        std::string lower = sym;
+    for (const auto& canonical : symbols) {
+        std::string binanceSym =
+            normalizer_.fromCanonical("binance", canonical).value_or(canonical);
+        std::string lower = binanceSym;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         if (!urlStreams.empty()) urlStreams += "/";
         urlStreams += lower + "@depth@" + std::to_string(updateIntervalMs) + "ms";
@@ -374,28 +396,34 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
         if (i > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
         }
-        const auto& symbol = symbols[i];
-        futures.push_back(std::async(std::launch::async, [this, symbol, maxSnapshotRetries,
-                                                          startStoken]() {
-            for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-                printf("[%s] fetching snapshot (attempt %d/%d)\n", symbol.c_str(), attempt,
-                       maxSnapshotRetries);
-                if (fetchAndApplySnapshot(symbol, *books->at(symbol), startStoken)) {
-                    return true;
+        const std::string& canonical = symbols[i];
+        // Convert canonical → Binance-specific for the REST snapshot URL.
+        std::string binanceSym =
+            normalizer_.fromCanonical("binance", canonical).value_or(canonical);
+        futures.push_back(std::async(
+            std::launch::async,
+            [this, canonical, binanceSym, maxSnapshotRetries, startStoken]() {
+                for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+                    printf("[%s] fetching snapshot (attempt %d/%d)\n", canonical.c_str(), attempt,
+                           maxSnapshotRetries);
+                    if (fetchAndApplySnapshot(binanceSym, canonical, *books->at(canonical),
+                                             startStoken)) {
+                        return true;
+                    }
+                    if (startStoken.stop_requested() || attempt == maxSnapshotRetries) {
+                        break;
+                    }
+                    int delayMs = 1000 * attempt;
+                    printf("[%s] snapshot fetch failed, retrying in %dms\n", canonical.c_str(),
+                           delayMs);
+                    std::unique_lock<std::mutex> lock(resyncMutex);
+                    resyncCv.wait_for(lock, startStoken, std::chrono::milliseconds(delayMs),
+                                      [] { return false; });
                 }
-                if (startStoken.stop_requested() || attempt == maxSnapshotRetries) {
-                    break;
-                }
-                int delayMs = 1000 * attempt;
-                printf("[%s] snapshot fetch failed, retrying in %dms\n", symbol.c_str(), delayMs);
-                std::unique_lock<std::mutex> lock(resyncMutex);
-                resyncCv.wait_for(lock, startStoken, std::chrono::milliseconds(delayMs),
-                                  [] { return false; });
-            }
-            fprintf(stderr, "[%s] snapshot fetch gave up after %d attempts\n", symbol.c_str(),
-                    maxSnapshotRetries);
-            return false;
-        }));
+                fprintf(stderr, "[%s] snapshot fetch gave up after %d attempts\n",
+                        canonical.c_str(), maxSnapshotRetries);
+                return false;
+            }));
     }
 
     bool allOk = true;

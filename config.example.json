@@ -1,12 +1,13 @@
 {
+  "exchange": "binance",
   "update_interval_ms": 100,
   "snapshot_depth": 1000,
-  "primary_symbol": "BTCUSDT",
+  "primary_symbol": "BTC-USDT",
   "symbols": [
-    "BTCUSDT",
-    "ETHUSDT",
-    "BNBUSDT",
-    "SOLUSDT",
-    "XRPUSDT"
+    "BTC-USDT",
+    "ETH-USDT",
+    "BNB-USDT",
+    "SOL-USDT",
+    "XRP-USDT"
   ]
 }

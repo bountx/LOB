@@ -70,6 +70,28 @@ bool OrderBook::applyUpdate(const nlohmann::json& update) {
     return true;
 }
 
+void OrderBook::applyDelta(const nlohmann::json& bidsArr, const nlohmann::json& asksArr) {
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    for (const auto& bid : bidsArr) {
+        long long price = parseDecimal(bid[0].get<std::string>());
+        long long quantity = parseDecimal(bid[1].get<std::string>());
+        if (quantity == 0) {
+            bids.erase(price);
+        } else {
+            bids[price] = quantity;
+        }
+    }
+    for (const auto& ask : asksArr) {
+        long long price = parseDecimal(ask[0].get<std::string>());
+        long long quantity = parseDecimal(ask[1].get<std::string>());
+        if (quantity == 0) {
+            asks.erase(price);
+        } else {
+            asks[price] = quantity;
+        }
+    }
+}
+
 void OrderBook::clear() {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     lastUpdateId = 0;

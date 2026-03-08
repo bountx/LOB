@@ -12,27 +12,24 @@
 
 #include "feed_handler.hpp"
 #include "i_exchange_adapter.hpp"
+#include "kraken_adapter.hpp"
 #include "metrics.hpp"
 #include "metrics_server.hpp"
 #include "order_book.hpp"
 #include "subscriber_server.hpp"
 
 /**
- * @brief Program entry point that loads configuration, initializes order books, metrics, the
- * exchange adapter and metrics server, then runs the monitoring loop.
+ * @brief Program entry point: loads configuration, initialises order books, metrics, the
+ * exchange adapter and servers, then runs the monitoring loop.
  *
- * The first command-line argument (if present) is treated as the path to the JSON configuration
- * file; otherwise "config.json" is used. The configuration controls update interval, snapshot
- * depth, the list of symbols to watch, and the primary symbol. After successful initialization the
- * function starts the metrics HTTP server and the exchange adapter, then enters an infinite loop
- * that periodically prints per-symbol order book statistics and metrics.
+ * Accepts an optional first command-line argument as the path to the JSON configuration file;
+ * defaults to "config.json". Symbols must be in canonical BASE-QUOTE format (e.g. "BTC-USDT").
+ * The "exchange" key selects "binance" (default) or "kraken".
  *
  * @param argc Number of command-line arguments.
- * @param argv Array of command-line argument strings; argv[1] may provide the config file path.
- * @return int `0` on normal termination (unreachable under normal operation), `-1` on
- * configuration, initialization, or runtime startup errors.
+ * @param argv argv[1] may provide the config file path.
+ * @return int 0 on normal exit (unreachable), -1 on startup error.
  */
-
 int main(int argc, char* argv[]) {
     const char* configPath = (argc > 1) ? argv[1] : "config.json";
 
@@ -49,8 +46,23 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    // ─── Exchange selection ───────────────────────────────────────────────────
+    std::string exchange = "binance";
+    if (config.contains("exchange")) {
+        if (!config["exchange"].is_string()) {
+            fprintf(stderr, "config error: 'exchange' must be a string\n");
+            return -1;
+        }
+        exchange = config["exchange"].get<std::string>();
+        if (exchange != "binance" && exchange != "kraken") {
+            fprintf(stderr, "config error: 'exchange' must be 'binance' or 'kraken'\n");
+            return -1;
+        }
+    }
+
+    // ─── Binance-specific options ─────────────────────────────────────────────
     int updateIntervalMs = 100;
-    if (config.contains("update_interval_ms")) {
+    if (exchange == "binance" && config.contains("update_interval_ms")) {
         if (!config["update_interval_ms"].is_number_integer()) {
             fprintf(stderr,
                     "config error: 'update_interval_ms' must be an integer (100 or 1000)\n");
@@ -63,6 +75,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // ─── Snapshot depth ───────────────────────────────────────────────────────
     int snapshotDepth = 1000;
     if (config.contains("snapshot_depth")) {
         if (!config["snapshot_depth"].is_number_integer()) {
@@ -76,7 +89,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (!config.contains("symbols") || !config["symbols"].is_array() || config["symbols"].empty()) {
+    // ─── Symbols (canonical BASE-QUOTE format) ────────────────────────────────
+    if (!config.contains("symbols") || !config["symbols"].is_array() ||
+        config["symbols"].empty()) {
         fprintf(stderr, "config error: 'symbols' must be a non-empty array\n");
         return -1;
     }
@@ -85,7 +100,6 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    // Validate each entry and canonicalise to UPPERCASE for map keys.
     std::vector<std::string> symbols;
     std::unordered_set<std::string> seen;
     for (const auto& entry : config["symbols"]) {
@@ -95,7 +109,17 @@ int main(int argc, char* argv[]) {
         }
         std::string sym = entry.get<std::string>();
         std::transform(sym.begin(), sym.end(), sym.begin(), ::toupper);
-        if (seen.count(sym)) {
+        // Validate canonical BASE-QUOTE format: must contain exactly one '-'.
+        const auto dashPos = sym.find('-');
+        if (dashPos == std::string::npos || dashPos == 0 || dashPos == sym.size() - 1 ||
+            sym.find('-', dashPos + 1) != std::string::npos) {
+            fprintf(stderr,
+                    "config error: symbol '%s' must be in canonical BASE-QUOTE format "
+                    "(e.g. \"BTC-USDT\")\n",
+                    sym.c_str());
+            return -1;
+        }
+        if (seen.count(sym) != 0U) {
             fprintf(stderr, "config error: duplicate symbol '%s'\n", sym.c_str());
             return -1;
         }
@@ -112,6 +136,7 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    // ─── Initialise books and metrics (keyed by canonical symbol) ─────────────
     std::unordered_map<std::string, std::unique_ptr<OrderBook>> books;
     std::unordered_map<std::string, std::unique_ptr<Metrics>> metricsMap;
     for (const auto& sym : symbols) {
@@ -119,10 +144,17 @@ int main(int argc, char* argv[]) {
         metricsMap[sym] = std::make_unique<Metrics>();
     }
 
-    BinanceAdapter adapter(updateIntervalMs);
+    // ─── Create adapter ───────────────────────────────────────────────────────
+    std::unique_ptr<IExchangeAdapter> adapter;
+    if (exchange == "binance") {
+        adapter = std::make_unique<BinanceAdapter>(updateIntervalMs);
+    } else {
+        adapter = std::make_unique<KrakenAdapter>();
+    }
 
+    // ─── Start servers ────────────────────────────────────────────────────────
     SubscriberServer subServer(books);
-    MetricsServer metricsServer(adapter.exchangeName(), metricsMap, books, 9090,
+    MetricsServer metricsServer(adapter->exchangeName(), metricsMap, books, 9090,
                                 [&subServer]() { return subServer.getStats(); });
     if (!metricsServer.start()) {
         fprintf(stderr, "couldn't bind metrics server on port 9090\n");
@@ -133,21 +165,23 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "couldn't bind subscriber server on port 8765\n");
         return -1;
     }
-    adapter.setUpdateCallback([&subServer](std::string_view exchange, std::string_view symbol,
-                                           const nlohmann::json& bids, const nlohmann::json& asks,
-                                           long long ts) {
-        subServer.broadcastUpdate(exchange, symbol, bids, asks, ts);
+
+    adapter->setUpdateCallback([&subServer](std::string_view exch, std::string_view symbol,
+                                            const nlohmann::json& bids, const nlohmann::json& asks,
+                                            long long ts) {
+        subServer.broadcastUpdate(exch, symbol, bids, asks, ts);
     });
 
-    printf("metrics at http://0.0.0.0:9090/metrics\n");
-    printf("subscribers at ws://0.0.0.0:8765\n");
+    printf("exchange:    %s\n", exchange.c_str());
+    printf("metrics at   http://0.0.0.0:9090/metrics\n");
+    printf("subscribers  ws://0.0.0.0:8765\n");
     printf("watching %zu symbol(s): ", symbols.size());
     for (const auto& sym : symbols) {
         printf("%s ", sym.c_str());
     }
     printf("\n");
 
-    if (!adapter.start(symbols, books, metricsMap, snapshotDepth)) {
+    if (!adapter->start(symbols, books, metricsMap, snapshotDepth)) {
         fprintf(stderr, "failed to start exchange adapter\n");
         return -1;
     }

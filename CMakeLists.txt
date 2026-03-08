@@ -27,6 +27,7 @@ if(NOT BUILD_TESTS_ONLY)
         src/main.cpp
         src/order_book.cpp
         src/feed_handler.cpp
+        src/kraken_adapter.cpp
     )
 
     # Link the ixwebsocket and nlohmann_json libraries to your executable
@@ -49,6 +50,8 @@ if(BUILD_TESTS)
         tests/test_binance_utils.cpp
         tests/test_prometheus_format.cpp
         tests/test_subscriber_server.cpp
+        tests/test_symbol_normalizer.cpp
+        tests/test_kraken_utils.cpp
         src/order_book.cpp
     )
 
