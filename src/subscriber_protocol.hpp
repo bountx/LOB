@@ -58,13 +58,16 @@ inline std::optional<ParsedRequest> parseClientMessage(const std::string& msg) {
 }
 
 // Format a price or quantity stored as long long (value * 1e8) into a decimal string.
-// E.g., 5000100000000 → "50001.0", 100000000 → "1", 5000000 → "0.05".
+// E.g., 5000100000000 → "50001", 100000000 → "1", 5000000 → "0.05".
 inline std::string formatScaled(long long scaled) {
-    constexpr long long SCALE = 100'000'000LL;
+    constexpr unsigned long long SCALE = 100'000'000ULL;
     const bool sign = scaled < 0;
-    const long long absScaled = std::llabs(scaled);
-    const long long intPart = absScaled / SCALE;
-    const long long fracPart = absScaled % SCALE;
+    // Cast to unsigned before negating: avoids UB when scaled == LLONG_MIN,
+    // whose positive value cannot be represented as long long.
+    const unsigned long long absScaled =
+        sign ? -static_cast<unsigned long long>(scaled) : static_cast<unsigned long long>(scaled);
+    const unsigned long long intPart = absScaled / SCALE;
+    const unsigned long long fracPart = absScaled % SCALE;
     std::string result = std::to_string(intPart);
     if (fracPart != 0) {
         std::string frac = std::to_string(fracPart);

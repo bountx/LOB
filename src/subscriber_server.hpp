@@ -15,7 +15,7 @@
 
 class SubscriberServer {
 public:
-    // Bytes queued on a client's send buffer before it is considered slow and disconnected.
+    // Clients with more than this many bytes queued get disconnected.
     static constexpr size_t kBackpressureLimit = 1 * 1024 * 1024;  // 1 MB
 
     explicit SubscriberServer(
