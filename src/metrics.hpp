@@ -9,10 +9,10 @@ struct Metrics {
     // Histogram for update processing time (µs).
     // Buckets are cumulative (Prometheus convention): each count includes all
     // observations <= the upper bound.  Index 10 is the +Inf bucket (== total count).
-    static constexpr std::array<long long, 10> kBucketBounds{
-        1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000};
-    std::atomic<long long> processingBuckets[11]{
-        {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}};
+    static constexpr std::array<long long, 10> kBucketBounds{1,   5,   10,  25,   50,
+                                                             100, 250, 500, 1000, 5000};
+    std::atomic<long long> processingBuckets[11]{{0}, {0}, {0}, {0}, {0}, {0},
+                                                 {0}, {0}, {0}, {0}, {0}};
     std::atomic<long long> processingUsSum{0};
 
     void recordProcessingUs(long long us) {

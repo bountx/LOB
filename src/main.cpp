@@ -159,8 +159,8 @@ int main(int argc, char* argv[]) {
             const auto& m = *metricsMap.at(sym);
             const long long count = m.processingBuckets[10].load();
             const long long avgUs = count > 0 ? m.processingUsSum.load() / count : 0;
-            printf("[%s] Msgs: %lld  Lag: %lld ms  AvgProc: %lld us  Updates: %lld\n",
-                   sym.c_str(), m.msgCount.load(), m.lastEventLagMs.load(), avgUs, count);
+            printf("[%s] Msgs: %lld  Lag: %lld ms  AvgProc: %lld us  Updates: %lld\n", sym.c_str(),
+                   m.msgCount.load(), m.lastEventLagMs.load(), avgUs, count);
         }
         printf("--------------------------------------------------\n");
     }

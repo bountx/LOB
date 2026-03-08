@@ -115,8 +115,7 @@ inline std::string buildPrometheusOutput(
 
     writeGaugeHeader("lob_event_lag_milliseconds", "Last event lag in milliseconds");
     for (const auto& [sym, m] : metricsMap) {
-        writeLine("lob_event_lag_milliseconds", sym,
-                  static_cast<double>(m->lastEventLagMs.load()));
+        writeLine("lob_event_lag_milliseconds", sym, static_cast<double>(m->lastEventLagMs.load()));
     }
 
     // Processing time histogram — _bucket, _sum, _count per symbol.
@@ -127,17 +126,15 @@ inline std::string buildPrometheusOutput(
         const std::string exch = escapeLabelValue(exchange);
         const std::string symEsc = escapeLabelValue(sym);
         // Build the shared label prefix (without closing brace).
-        const std::string base =
-            "{exchange=\"" + exch + "\",symbol=\"" + symEsc + "\"";
+        const std::string base = "{exchange=\"" + exch + "\",symbol=\"" + symEsc + "\"";
         for (int i = 0; i < 10; ++i) {
             ss << "lob_processing_time_microseconds_bucket" << base << ",le=\""
-               << Metrics::kBucketBounds[i] << "\"} "
-               << m->processingBuckets[i].load() << "\n";
+               << Metrics::kBucketBounds[i] << "\"} " << m->processingBuckets[i].load() << "\n";
         }
-        ss << "lob_processing_time_microseconds_bucket" << base
-           << ",le=\"+Inf\"} " << m->processingBuckets[10].load() << "\n";
-        ss << "lob_processing_time_microseconds_sum" << base << "} "
-           << m->processingUsSum.load() << "\n";
+        ss << "lob_processing_time_microseconds_bucket" << base << ",le=\"+Inf\"} "
+           << m->processingBuckets[10].load() << "\n";
+        ss << "lob_processing_time_microseconds_sum" << base << "} " << m->processingUsSum.load()
+           << "\n";
         ss << "lob_processing_time_microseconds_count" << base << "} "
            << m->processingBuckets[10].load() << "\n";
     }

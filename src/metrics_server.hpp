@@ -30,9 +30,11 @@ public:
     MetricsServer(std::string_view exchange,
                   std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
                   std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
-                  int port = 9090,
-                  std::function<SubscriberStats()> subStatsFn = nullptr)
-        : exchange(exchange), metricsMap(metricsMap), books(books), port(port),
+                  int port = 9090, std::function<SubscriberStats()> subStatsFn = nullptr)
+        : exchange(exchange),
+          metricsMap(metricsMap),
+          books(books),
+          port(port),
           subStatsFn_(std::move(subStatsFn)) {}
 
     /**
