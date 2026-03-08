@@ -1,6 +1,7 @@
 #pragma once
 #include <ixwebsocket/IXWebSocketServer.h>
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -12,6 +13,7 @@
 #include "nlohmann/json.hpp"
 #include "order_book.hpp"
 #include "subscriber_protocol.hpp"
+#include "subscriber_stats.hpp"
 
 class SubscriberServer {
 public:
@@ -127,6 +129,21 @@ public:
         }
     }
 
+    // Returns a snapshot of subscriber server counters for the metrics scrape.
+    SubscriberStats getStats() const {
+        SubscriberStats s;
+        {
+            std::lock_guard lock(mu_);
+            s.connectedClients = static_cast<long long>(clients_.size());
+            for (const auto& [id, client] : clients_) {
+                s.activeSubscriptions += static_cast<long long>(client.streams.size());
+            }
+        }
+        s.messagesSentTotal = messagesSent_.load();
+        s.backpressureDisconnectsTotal = backpressureDisconnects_.load();
+        return s;
+    }
+
     // Fan out an incremental update to all clients subscribed to exchange.SYMBOL.
     /**
      * @brief Sends an incremental order-book update to all clients subscribed to the given
@@ -148,22 +165,35 @@ public:
         const std::string streamKey = std::string(exchange) + "." + std::string(symbol);
         const std::string msg = subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks);
 
-        // Collect target sockets under the lock, then do I/O outside it.
-        std::vector<std::shared_ptr<ix::WebSocket>> targets;
+        // Collect target sockets with their IDs under the lock, then do I/O outside it.
+        std::vector<std::pair<std::string, std::shared_ptr<ix::WebSocket>>> targets;
         {
             std::lock_guard lock(mu_);
             for (auto& [id, client] : clients_) {
                 if (!client.streams.count(streamKey)) continue;
                 auto ws = client.ws.lock();
-                if (ws) targets.push_back(std::move(ws));
+                if (ws) targets.emplace_back(id, std::move(ws));
             }
         }
-        for (auto& ws : targets) {
+        std::vector<std::string> backpressureIds;
+        for (auto& [id, ws] : targets) {
             if (ws->bufferedAmount() > kBackpressureLimit) {
                 ws->close();
+                backpressureIds.push_back(id);
             } else {
                 ws->send(msg);
+                messagesSent_.fetch_add(1, std::memory_order_relaxed);
             }
+        }
+        // Remove backpressure-closed clients immediately so getStats() stays consistent.
+        // The async Close callback will call clients_.erase() again, which is a safe no-op.
+        if (!backpressureIds.empty()) {
+            std::lock_guard lock(mu_);
+            for (const auto& id : backpressureIds) {
+                clients_.erase(id);
+            }
+            backpressureDisconnects_.fetch_add(
+                static_cast<long long>(backpressureIds.size()), std::memory_order_relaxed);
         }
     }
 
@@ -272,4 +302,6 @@ private:
     std::unordered_map<std::string, ClientState> clients_;
     ix::WebSocketServer server_;
     bool started_ = false;
+    std::atomic<long long> messagesSent_{0};
+    std::atomic<long long> backpressureDisconnects_{0};
 };

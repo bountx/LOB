@@ -208,13 +208,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         auto end = std::chrono::high_resolution_clock::now();
         long long processingUs =
             std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-        metrics.lastProcessingUs.store(processingUs);
-
-        long long prevMax = metrics.maxProcessingUs.load();
-        while (processingUs > prevMax &&
-               !metrics.maxProcessingUs.compare_exchange_weak(prevMax, processingUs)) {
-        }
-
+        metrics.recordProcessingUs(processingUs);
         metrics.msgCount.fetch_add(1);
 
         if (updateCallback_) {

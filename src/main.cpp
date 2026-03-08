@@ -121,13 +121,14 @@ int main(int argc, char* argv[]) {
 
     BinanceAdapter adapter(updateIntervalMs);
 
-    MetricsServer metricsServer(adapter.exchangeName(), metricsMap, books);
+    SubscriberServer subServer(books);
+    MetricsServer metricsServer(adapter.exchangeName(), metricsMap, books, 9090,
+                                [&subServer]() { return subServer.getStats(); });
     if (!metricsServer.start()) {
         fprintf(stderr, "couldn't bind metrics server on port 9090\n");
         return -1;
     }
 
-    SubscriberServer subServer(books);
     if (!subServer.start()) {
         fprintf(stderr, "couldn't bind subscriber server on port 8765\n");
         return -1;
@@ -156,10 +157,11 @@ int main(int argc, char* argv[]) {
         for (const auto& sym : symbols) {
             books.at(sym)->printOrderBookStats();
             const auto& m = *metricsMap.at(sym);
-            printf("[%s] Msgs: %lld  Lag: %lld ms  Proc: %lld us  MaxProc: %lld us\n", sym.c_str(),
-                   m.msgCount.load(), m.lastEventLagMs.load(), m.lastProcessingUs.load(),
-                   m.maxProcessingUs.load());
-            metricsMap.at(sym)->maxProcessingUs.store(0);
+            const long long sum = m.processingUsSum.load();
+            const long long count = m.processingBuckets[10].load();
+            const double avgUs = count > 0 ? static_cast<double>(sum) / count : 0.0;
+            printf("[%s] Msgs: %lld  Lag: %lld ms  AvgProc: %.1f us  Updates: %lld\n",
+                   sym.c_str(), m.msgCount.load(), m.lastEventLagMs.load(), avgUs, count);
         }
         printf("--------------------------------------------------\n");
     }
