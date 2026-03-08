@@ -230,7 +230,7 @@ private:
                 clients_[id].streams.insert(key);
             }
 
-            auto it = books_.find(key);
+            auto it = books_.find(symbol);
             if (it != books_.end()) {
                 auto snap = it->second->getSnapshot();
                 if (snap.applied) {
