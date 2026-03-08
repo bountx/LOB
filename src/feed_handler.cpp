@@ -340,6 +340,10 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
         urlStreams += lower + "@depth@" + std::to_string(updateIntervalMs) + "ms";
     }
     webSocket.setUrl("wss://stream.binance.com:9443/stream?streams=" + urlStreams);
+    // Send a ping every 30s so half-open TCP connections (e.g. Binance's 24h
+    // forced disconnect that sends no close frame) are detected and trigger
+    // IXWebSocket's built-in reconnect before we silently starve.
+    webSocket.setPingInterval(30);
 
     webSocket.setOnMessageCallback(
         [this](const ix::WebSocketMessagePtr& msg) { handleWsMessage(msg); });
