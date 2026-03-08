@@ -90,6 +90,8 @@ TEST_F(PrometheusFormatTest, ExchangeLabelAppearsOnEveryDataLine) {
     const auto lines = dataLines(build("binance"));
     ASSERT_FALSE(lines.empty());
     for (const auto& line : lines) {
+        // Process-level metrics (e.g. lob_process_rss_bytes) carry no labels — skip them.
+        if (line.find('{') == std::string::npos) continue;
         EXPECT_NE(line.find("exchange=\"binance\""), std::string::npos) << line;
     }
 }
@@ -98,6 +100,8 @@ TEST_F(PrometheusFormatTest, SymbolLabelAppearsOnEveryDataLine) {
     const auto lines = dataLines(build());
     ASSERT_FALSE(lines.empty());
     for (const auto& line : lines) {
+        // Process-level metrics (e.g. lob_process_rss_bytes) carry no labels — skip them.
+        if (line.find('{') == std::string::npos) continue;
         EXPECT_NE(line.find("symbol=\"BTCUSDT\""), std::string::npos) << line;
     }
 }
