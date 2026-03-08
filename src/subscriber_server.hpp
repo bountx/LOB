@@ -16,21 +16,61 @@
 class SubscriberServer {
 public:
     // Clients with more than this many bytes queued get disconnected.
-    static constexpr size_t kBackpressureLimit = 1 * 1024 * 1024;  // 1 MB
+    static constexpr size_t kBackpressureLimit = 1 * 1024 * 1024;  /**
+         * @brief Constructs a SubscriberServer that manages WebSocket subscribers for order book streams.
+         *
+         * Stores a reference to the shared order-book map and configures the server to listen on the
+         * specified TCP port.
+         *
+         * @param books Reference to the map of order books keyed by "exchange.symbol".
+         * @param port TCP port to listen on (default 8765).
+         */
 
     explicit SubscriberServer(
         std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books, int port = 8765)
         : books_(books), port_(port), server_(port) {}
 
-    ~SubscriberServer() { stop(); }
+    /**
+ * @brief Stops the server and releases associated resources when the instance is destroyed.
+ *
+ * Ensures the underlying WebSocket server is stopped and internal state is cleaned up before destruction.
+ */
+~SubscriberServer() { stop(); }
 
-    SubscriberServer(const SubscriberServer&) = delete;
-    SubscriberServer& operator=(const SubscriberServer&) = delete;
-    SubscriberServer(SubscriberServer&&) = delete;
-    SubscriberServer& operator=(SubscriberServer&&) = delete;
+    /**
+ * @brief Disables copy construction of SubscriberServer.
+ *
+ * Copying a SubscriberServer is not allowed; attempts to copy an instance are prohibited and will fail to compile.
+ */
+SubscriberServer(const SubscriberServer&) = delete;
+    /**
+ * @brief Deleted copy assignment operator to disable copying of SubscriberServer instances.
+ *
+ * Copying is disallowed because SubscriberServer manages internal connection state and server resources that must not be duplicated.
+ */
+SubscriberServer& operator=(const SubscriberServer&) = delete;
+    /**
+ * @brief Disable move construction for SubscriberServer.
+ *
+ * Prevents transferring ownership of internal resources (connections, server state)
+ * by deleting the move constructor.
+ */
+SubscriberServer(SubscriberServer&&) = delete;
+    /**
+ * @brief Disable move-assignment for SubscriberServer.
+ *
+ * Deleting this operator prevents moving a SubscriberServer instance, preserving its non-transferable ownership semantics.
+ */
+SubscriberServer& operator=(SubscriberServer&&) = delete;
 
     // Bind and begin serving subscribers in a background thread.
-    // Returns false if the port cannot be bound.
+    /**
+     * @brief Starts the WebSocket server and installs connection and message callbacks for new clients.
+     *
+     * When started, incoming connections are tracked and per-connection message handlers are attached.
+     *
+     * @return `true` if the server was started successfully or was already running, `false` if binding to the configured port failed.
+     */
     bool start() {
         if (started_) return true;
 
@@ -67,6 +107,12 @@ public:
         return true;
     }
 
+    /**
+     * @brief Stops the subscriber server and marks it as not started.
+     *
+     * If the server is running, shuts down the underlying WebSocket server and updates internal state.
+     * Calling this when the server is not started has no effect.
+     */
     void stop() {
         if (started_) {
             server_.stop();
@@ -75,7 +121,18 @@ public:
     }
 
     // Fan out an incremental update to all clients subscribed to exchange.SYMBOL.
-    // bids/asks are JSON arrays of ["price","qty"] changed levels (Binance "b"/"a" fields).
+    /**
+     * @brief Sends an incremental order-book update to all clients subscribed to the given exchange.symbol stream.
+     *
+     * Sends a preformatted update message for the specified exchange and symbol to every connected client that
+     * has subscribed to that stream; may close a client's WebSocket if its send buffer exceeds the backpressure limit.
+     *
+     * @param exchange Exchange identifier (e.g., "binance").
+     * @param symbol Trading symbol (e.g., "BTCUSDT").
+     * @param bids JSON array of changed bid levels, each element formatted as ["price","qty"].
+     * @param asks JSON array of changed ask levels, each element formatted as ["price","qty"].
+     * @param timestamp Millisecond-resolution timestamp associated with the update.
+     */
     void broadcastUpdate(std::string_view exchange, std::string_view symbol,
                          const nlohmann::json& bids, const nlohmann::json& asks,
                          long long timestamp) {
@@ -101,6 +158,16 @@ private:
         std::unordered_set<std::string> streams;  // "exchange.SYMBOL" keys
     };
 
+    /**
+     * @brief Processes a raw message from a client WebSocket and routes subscription actions.
+     *
+     * Parses the client's text message, sends an error response if the message is invalid,
+     * and invokes subscribe or unsubscribe handling for the parsed streams.
+     *
+     * @param wws Weak pointer to the client's WebSocket; no action is taken if it has expired.
+     * @param id Identifier for the client connection.
+     * @param text Raw client message payload.
+     */
     void onMessage(std::weak_ptr<ix::WebSocket> wws, const std::string& id,
                    const std::string& text) {
         auto ws = wws.lock();
@@ -119,6 +186,17 @@ private:
         }
     }
 
+    /**
+     * @brief Register a client's subscriptions and emit initial snapshots when available.
+     *
+     * Validates each requested stream, adds the "exchange.symbol" key to the client's subscription set,
+     * sends an error message to the client for any malformed stream, and — if an OrderBook for the
+     * symbol exists and has a snapshot applied — sends the current snapshot for that exchange/symbol.
+     *
+     * @param ws Shared pointer to the client's WebSocket connection.
+     * @param id Client identifier used to track subscriptions.
+     * @param streams Vector of stream strings to subscribe to; each string is expected in "exchange.symbol" form.
+     */
     void handleSubscribe(std::shared_ptr<ix::WebSocket> ws, const std::string& id,
                          const std::vector<std::string>& streams) {
         for (const auto& stream : streams) {
@@ -148,6 +226,16 @@ private:
         }
     }
 
+    /**
+     * @brief Removes the given stream subscriptions for a specific client.
+     *
+     * Locates the client by its identifier and erases each valid "exchange.symbol"
+     * stream from the client's subscription set. Invalid stream strings are
+     * ignored; if the client is not found, the call has no effect.
+     *
+     * @param id Client identifier used to look up subscription state.
+     * @param streams List of stream descriptors (e.g., "exchange/SYMBOL") to unsubscribe.
+     */
     void handleUnsubscribe(const std::string& id, const std::vector<std::string>& streams) {
         std::lock_guard lock(mu_);
         auto it = clients_.find(id);

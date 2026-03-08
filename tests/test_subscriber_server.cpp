@@ -142,7 +142,14 @@ TEST(FormatScaled, NegativeSmallFraction) {
     EXPECT_EQ(subscriber::formatScaled(-50'000'000LL), "-0.5");
 }
 
-// ─── bookLevelsToJson ────────────────────────────────────────────────────────
+/**
+ * @brief Convert a map of scaled price levels into a JSON array of price/size pairs.
+ *
+ * @param levels Map whose keys are prices scaled by 1e8 and whose values are sizes scaled by 1e8.
+ * @return nlohmann::json An array where each element is a two-element array `[price, size]`:
+ *         both `price` and `size` are decimal strings produced from the corresponding scaled integers;
+ *         elements appear in the same iteration order as `levels`.
+ */
 
 TEST(BookLevelsToJson, AscendingAsks) {
     std::map<long long, long long, std::less<>> asks;
@@ -175,7 +182,20 @@ TEST(BookLevelsToJson, EmptyBook) {
     EXPECT_TRUE(j.empty());
 }
 
-// ─── buildSnapshot ───────────────────────────────────────────────────────────
+/**
+ * @brief Build a raw JSON snapshot message for an order book.
+ *
+ * Constructs a JSON object with type "snapshot" containing the provided exchange,
+ * symbol, timestamp, and the supplied bids and asks arrays, then returns it as a
+ * serialized string.
+ *
+ * @param exchange Exchange identifier (e.g., "binance").
+ * @param symbol Market symbol (e.g., "BTCUSDT").
+ * @param ts Timestamp in milliseconds since epoch.
+ * @param bids JSON array of bid entries where each entry is [price, size] as strings.
+ * @param asks JSON array of ask entries where each entry is [price, size] as strings.
+ * @return std::string Serialized JSON snapshot containing fields: type, exchange, symbol, ts, bids, asks.
+ */
 
 TEST(BuildSnapshot, CorrectStructure) {
     nlohmann::json bids = nlohmann::json::array();
@@ -215,7 +235,12 @@ TEST(BuildUpdate, CorrectStructure) {
     EXPECT_EQ(j["asks"][0][0], "94502.00");
 }
 
-// ─── buildError ──────────────────────────────────────────────────────────────
+/**
+ * @brief Constructs a JSON-formatted error message.
+ *
+ * @param message Human-readable error description to include in the JSON.
+ * @return std::string Raw JSON string containing an object with "type" set to "error" and "message" set to the provided message.
+ */
 
 TEST(BuildError, CorrectStructure) {
     auto raw = subscriber::buildError("bad stream: foo");

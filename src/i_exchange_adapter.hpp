@@ -24,7 +24,14 @@ public:
 
     // Register a callback invoked after each successfully applied book update.
     // Must be called before start(). Thread-safe: the callback is invoked from the
-    // adapter's internal message-processing thread.
+    /**
+ * @brief Register a callback to be invoked after each successfully applied order-book update.
+ *
+ * The callback is stored and may be invoked from the adapter's internal message-processing thread;
+ * the provided function must be safe to call from that thread context.
+ *
+ * @param cb Callback with signature `void(std::string_view exchange, std::string_view symbol, const nlohmann::json& bids, const nlohmann::json& asks, long long ts)`; it is called after each applied update with the exchange name, symbol, bids and asks as JSON, and the update timestamp.
+ */
     void setUpdateCallback(UpdateCallback cb) { updateCallback_ = std::move(cb); }
 
     /**
