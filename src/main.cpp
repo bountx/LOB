@@ -15,6 +15,7 @@
 #include "metrics.hpp"
 #include "metrics_server.hpp"
 #include "order_book.hpp"
+#include "subscriber_server.hpp"
 
 /**
  * @brief Program entry point that loads configuration, initializes order books, metrics, the
@@ -125,7 +126,20 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "couldn't bind metrics server on port 9090\n");
         return -1;
     }
+
+    SubscriberServer subServer(books);
+    if (!subServer.start()) {
+        fprintf(stderr, "couldn't bind subscriber server on port 8765\n");
+        return -1;
+    }
+    adapter.setUpdateCallback([&subServer](std::string_view exchange, std::string_view symbol,
+                                           const nlohmann::json& bids, const nlohmann::json& asks,
+                                           long long ts) {
+        subServer.broadcastUpdate(exchange, symbol, bids, asks, ts);
+    });
+
     printf("metrics at http://0.0.0.0:9090/metrics\n");
+    printf("subscribers at ws://0.0.0.0:8765\n");
     printf("watching %zu symbol(s): ", symbols.size());
     for (const auto& sym : symbols) {
         printf("%s ", sym.c_str());

@@ -51,5 +51,6 @@ RUN chown lob:lob /usr/local/bin/lob_app
 USER lob
 
 EXPOSE 9090
+EXPOSE 8765
 
 CMD ["lob_app"]
