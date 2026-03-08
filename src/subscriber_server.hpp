@@ -31,7 +31,7 @@ public:
 
     explicit SubscriberServer(std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
                               int port = 8765)
-        : books_(books), port_(port), server_(port) {}
+        : books_(books), port_(port), server_(port, "0.0.0.0") {}
 
     /**
      * @brief Stops the server and releases associated resources when the instance is destroyed.
