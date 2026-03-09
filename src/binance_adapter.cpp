@@ -142,6 +142,15 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
  * Binance combo stream JSON object with fields `"stream"` and `"data"`.
  */
 void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
+    // Refresh the connection-level activity timestamp on any live traffic so the
+    // watchdog can distinguish a dead socket from a legitimately quiet symbol.
+    if (msg->type == ix::WebSocketMessageType::Open ||
+        msg->type == ix::WebSocketMessageType::Message) {
+        lastConnectionActivityMs_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now().time_since_epoch())
+                                            .count(),
+                                        std::memory_order_relaxed);
+    }
     if (msg->type == ix::WebSocketMessageType::Open) {
         bool isReconnect = false;
         {
@@ -381,6 +390,7 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
     for (const auto& sym : symbols) {
         metricsMapRef.at(sym)->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
     }
+    lastConnectionActivityMs_.store(0, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(bufferMutex);
         symbolBuffers.clear();
@@ -485,10 +495,11 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
 /**
  * @brief Watchdog thread: detects a silently stalled Binance feed and forces a reconnect.
  *
- * Checks every 500 ms whether any subscribed symbol has gone longer than 2 s without an update.
- * lastUpdateTimeMs == 0 means the symbol is waiting for its initial snapshot and is skipped.
- * On stale detection the WebSocket is stopped; ixwebsocket reconnects to the same stream URL,
- * the Open handler clears stale state and enqueues all symbols for resync.
+ * Checks every 500 ms whether any WebSocket message has arrived in the last 2 s.
+ * Uses a connection-level timestamp (lastConnectionActivityMs_) updated on every Open
+ * or data frame, so legitimately quiet symbols do not trigger false reconnects.
+ * lastConnectionActivityMs_ == 0 means no connection has been established yet; the
+ * watchdog stays silent until traffic has been seen at least once.
  */
 void BinanceAdapter::runWatchdog(std::stop_token stoken) {
     constexpr long long kStaleThresholdMs = 2000;
@@ -501,26 +512,16 @@ void BinanceAdapter::runWatchdog(std::stop_token stoken) {
                                   std::chrono::steady_clock::now().time_since_epoch())
                                   .count();
 
-        for (const auto& sym : subscribedSymbols_) {
-            auto it = metricsMap->find(sym);
-            if (it == metricsMap->end()) continue;
-            const long long last = it->second->lastUpdateTimeMs.load(std::memory_order_relaxed);
-            if (last == 0) continue;  // awaiting snapshot after (re)connect — skip
-            if ((now - last) > kStaleThresholdMs) {
-                fprintf(stderr,
-                        "[binance] stale feed: %s last update %lld ms ago, forcing reconnect\n",
-                        sym.c_str(), now - last);
-                // Clear sentinels immediately so the watchdog skips all symbols
-                // during the reconnect window before the Open handler fires.
-                for (const auto& s : subscribedSymbols_) {
-                    auto sit = metricsMap->find(s);
-                    if (sit != metricsMap->end())
-                        sit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
-                }
-                webSocket.stop();
-                webSocket.start();
-                break;
-            }
+        const long long last = lastConnectionActivityMs_.load(std::memory_order_relaxed);
+        if (last == 0) continue;  // not yet connected — skip
+        if ((now - last) > kStaleThresholdMs) {
+            fprintf(stderr, "[binance] stale connection: no data for %lld ms, forcing reconnect\n",
+                    now - last);
+            // Zero the sentinel before restarting so the next watchdog tick skips
+            // until the Open handler refreshes lastConnectionActivityMs_.
+            lastConnectionActivityMs_.store(0, std::memory_order_relaxed);
+            webSocket.stop();
+            webSocket.start();
         }
     }
 }

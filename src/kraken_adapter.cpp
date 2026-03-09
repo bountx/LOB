@@ -132,6 +132,15 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
  * @param msg Pointer to the WebSocket message.
  */
 void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
+    // Refresh the connection-level activity timestamp on any live traffic so the
+    // watchdog can distinguish a dead socket from a legitimately quiet symbol.
+    if (msg->type == ix::WebSocketMessageType::Open ||
+        msg->type == ix::WebSocketMessageType::Message) {
+        lastConnectionActivityMs_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now().time_since_epoch())
+                                            .count(),
+                                        std::memory_order_relaxed);
+    }
     if (msg->type == ix::WebSocketMessageType::Open) {
         bool isReconnect = false;
         {
@@ -296,6 +305,7 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
     for (const auto& canonical : symbols) {
         metricsMapRef.at(canonical)->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
     }
+    lastConnectionActivityMs_.store(0, std::memory_order_relaxed);
 
     webSocket_.setUrl("wss://ws.kraken.com/v2");
     webSocket_.setPingInterval(30);
@@ -350,12 +360,14 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
 /**
  * @brief Watchdog thread: detects a silently stalled Kraken feed and forces a reconnect.
  *
- * Checks every 500 ms whether any subscribed symbol has gone longer than 2 s without an update
- * (lastUpdateTimeMs == 0 means the symbol is still waiting for its initial snapshot and is
- * deliberately skipped). On detection the WebSocket is stopped; ixwebsocket's built-in
- * auto-reconnect fires the Open handler which re-subscribes and resets all sentinels to 0.
- * The watchdog skips any symbol with lastUpdateTimeMs == 0, so it stays silent until the
- * new snapshot lands and re-arms the 2 s timer.
+ * Checks every 500 ms whether any WebSocket message has arrived in the last 2 s.
+ * Uses a connection-level timestamp (lastConnectionActivityMs_) updated on every Open
+ * or data frame, so legitimately quiet symbols do not trigger false reconnects.
+ * A stalled resubscribe (Open fires but no book data arrives) is also caught because
+ * the Open handler refreshes the timestamp; if no subsequent messages arrive within
+ * 2 s the watchdog fires again.
+ * lastConnectionActivityMs_ == 0 means no connection has been established yet; the
+ * watchdog stays silent until traffic has been seen at least once.
  */
 void KrakenAdapter::runWatchdog(std::stop_token stoken) {
     constexpr long long kStaleThresholdMs = 2000;
@@ -368,26 +380,16 @@ void KrakenAdapter::runWatchdog(std::stop_token stoken) {
                                   std::chrono::steady_clock::now().time_since_epoch())
                                   .count();
 
-        for (const auto& sym : subscribedSymbols_) {
-            auto it = metricsMap_->find(sym);
-            if (it == metricsMap_->end()) continue;
-            const long long last = it->second->lastUpdateTimeMs.load(std::memory_order_relaxed);
-            if (last == 0) continue;  // awaiting snapshot after (re)connect — skip
-            if ((now - last) > kStaleThresholdMs) {
-                fprintf(stderr,
-                        "[kraken] stale feed: %s last update %lld ms ago, forcing reconnect\n",
-                        sym.c_str(), now - last);
-                // Clear sentinels immediately so the watchdog skips all symbols
-                // during the reconnect window before the Open handler fires.
-                for (const auto& s : subscribedSymbols_) {
-                    auto sit = metricsMap_->find(s);
-                    if (sit != metricsMap_->end())
-                        sit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
-                }
-                webSocket_.stop();
-                webSocket_.start();
-                break;
-            }
+        const long long last = lastConnectionActivityMs_.load(std::memory_order_relaxed);
+        if (last == 0) continue;  // not yet connected — skip
+        if ((now - last) > kStaleThresholdMs) {
+            fprintf(stderr, "[kraken] stale connection: no data for %lld ms, forcing reconnect\n",
+                    now - last);
+            // Zero the sentinel before restarting so the next watchdog tick skips
+            // until the Open handler refreshes lastConnectionActivityMs_.
+            lastConnectionActivityMs_.store(0, std::memory_order_relaxed);
+            webSocket_.stop();
+            webSocket_.start();
         }
     }
 }

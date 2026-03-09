@@ -66,6 +66,10 @@ private:
     std::jthread resyncThread;
     std::jthread watchdogThread_;
 
+    // Steady-clock ms of the last received WebSocket message (Open or data frame).
+    // 0 = not yet connected. Used by the watchdog for connection-level stall detection.
+    std::atomic<long long> lastConnectionActivityMs_{0};
+
     int snapshotDepth = 1000;
     std::vector<std::string> subscribedSymbols_;  // canonical symbols; for reconnect + watchdog
 

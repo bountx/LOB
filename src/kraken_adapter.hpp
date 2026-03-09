@@ -62,6 +62,10 @@ private:
 
     std::jthread watchdogThread_;
 
+    // Steady-clock ms of the last received WebSocket message (Open or data frame).
+    // 0 = not yet connected. Used by the watchdog for connection-level stall detection.
+    std::atomic<long long> lastConnectionActivityMs_{0};
+
     void handleWsMessage(const ix::WebSocketMessagePtr& msg);
     void handleBookSnapshot(const nlohmann::json& data);
     void handleBookUpdate(const nlohmann::json& data);
