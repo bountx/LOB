@@ -48,7 +48,7 @@
         "label": "Symbol",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(lob_messages_total{exchange=\"$exchange\"}, symbol)",
+        "query": "label_values(lob_messages_total{exchange=~\"$exchange\"}, symbol)",
         "refresh": 1,
         "multi": false,
         "includeAll": false,
@@ -69,32 +69,32 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(lob_messages_total{exchange=\"$exchange\",symbol=\"$symbol\"}[1m]))",
+          "expr": "sum(rate(lob_messages_total{exchange=~\"$exchange\",symbol=\"$symbol\"}[1m]))",
           "legendFormat": "msg/s",
           "refId": "A"
         },
         {
-          "expr": "lob_event_lag_milliseconds{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "expr": "lob_event_lag_milliseconds{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Event Lag",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "expr": "histogram_quantile(0.99, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])))",
           "legendFormat": "p99 Processing",
           "refId": "C"
         },
         {
-          "expr": "rate(lob_processing_time_microseconds_sum{exchange=\"$exchange\",symbol=\"$symbol\"}[2m]) / rate(lob_processing_time_microseconds_count{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])",
+          "expr": "rate(lob_processing_time_microseconds_sum{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m]) / rate(lob_processing_time_microseconds_count{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])",
           "legendFormat": "Avg Processing",
           "refId": "D"
         },
         {
-          "expr": "lob_orderbook_best_ask_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_ask_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Ask",
           "refId": "E"
         },
         {
-          "expr": "lob_orderbook_spread_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_spread_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Spread",
           "refId": "F"
         },
@@ -182,7 +182,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "rate(lob_messages_total{exchange=\"$exchange\"}[1m])",
+          "expr": "rate(lob_messages_total{exchange=~\"$exchange\"}[1m])",
           "legendFormat": "{{symbol}}",
           "refId": "A"
         }
@@ -209,7 +209,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_event_lag_milliseconds{exchange=\"$exchange\"}",
+          "expr": "lob_event_lag_milliseconds{exchange=~\"$exchange\"}",
           "legendFormat": "{{symbol}}",
           "refId": "A"
         }
@@ -244,19 +244,19 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_best_ask_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_ask_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Ask",
           "refId": "A"
         },
         {
-          "expr": "lob_orderbook_best_bid_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_best_bid_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "Best Bid",
           "refId": "B"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "none",
           "decimals": 2,
           "color": { "mode": "palette-classic" },
           "custom": { "lineWidth": 2, "fillOpacity": 5 }
@@ -277,14 +277,14 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_spread_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_spread_price{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "spread",
           "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "none",
           "decimals": 4,
           "color": { "mode": "palette-classic" },
           "custom": { "lineWidth": 2, "fillOpacity": 10 }
@@ -305,22 +305,22 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "expr": "histogram_quantile(0.50, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "expr": "histogram_quantile(0.95, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "expr": "histogram_quantile(0.99, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])))",
           "legendFormat": "p99",
           "refId": "C"
         },
         {
-          "expr": "rate(lob_processing_time_microseconds_sum{exchange=\"$exchange\",symbol=\"$symbol\"}[2m]) / rate(lob_processing_time_microseconds_count{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])",
+          "expr": "rate(lob_processing_time_microseconds_sum{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m]) / rate(lob_processing_time_microseconds_count{exchange=~\"$exchange\",symbol=\"$symbol\"}[2m])",
           "legendFormat": "mean",
           "refId": "D"
         }
@@ -355,12 +355,12 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "lob_orderbook_asks_count{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_asks_count{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "asks",
           "refId": "A"
         },
         {
-          "expr": "lob_orderbook_bids_count{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "expr": "lob_orderbook_bids_count{exchange=~\"$exchange\",symbol=\"$symbol\"}",
           "legendFormat": "bids",
           "refId": "B"
         }
