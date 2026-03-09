@@ -177,7 +177,7 @@ TEST_F(PrometheusFormatTest, DataAgeAbsentWhenSentinelIsZero) {
 // metric must be present with a non-negative value.
 TEST_F(PrometheusFormatTest, DataAgeEmittedAfterFirstUpdate) {
     const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
+                                std::chrono::steady_clock::now().time_since_epoch())
                                 .count();
     metrics["BTCUSDT"]->lastUpdateTimeMs.store(nowMs - 500);  // 0.5 s ago
 
@@ -190,7 +190,7 @@ TEST_F(PrometheusFormatTest, DataAgeEmittedAfterFirstUpdate) {
 // 2-second window to keep the test stable under slow CI).
 TEST_F(PrometheusFormatTest, DataAgeValueApproximatelyCorrect) {
     const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
+                                std::chrono::steady_clock::now().time_since_epoch())
                                 .count();
     // Pretend the last update was exactly 3 seconds ago.
     metrics["BTCUSDT"]->lastUpdateTimeMs.store(nowMs - 3000);
@@ -215,7 +215,7 @@ TEST_F(PrometheusFormatTest, DataAgeSkipsZeroSentinelSymbolsInMultiSymbol) {
     // BTCUSDT stays at sentinel 0 (no snapshot yet).
     // ETHUSDT has received updates.
     const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
+                                std::chrono::steady_clock::now().time_since_epoch())
                                 .count();
     metrics["ETHUSDT"]->lastUpdateTimeMs.store(nowMs - 1000);
 
@@ -231,7 +231,7 @@ TEST_F(PrometheusFormatTest, DataAgeSkipsZeroSentinelSymbolsInMultiSymbol) {
 // HELP/TYPE headers must appear once when at least one symbol has data.
 TEST_F(PrometheusFormatTest, DataAgeHeadersPresentWhenDataExists) {
     const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch())
+                                std::chrono::steady_clock::now().time_since_epoch())
                                 .count();
     metrics["BTCUSDT"]->lastUpdateTimeMs.store(nowMs - 100);
 
