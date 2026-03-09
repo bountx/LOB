@@ -1,0 +1,409 @@
+{
+  "title": "LOB — Exchange Detail",
+  "uid": "lob-exch-01",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5s",
+  "tags": ["lob", "trading", "performance"],
+  "timezone": "browser",
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "graphTooltip": 1,
+  "fiscalYearStartMonth": 0,
+  "links": [
+    {
+      "title": "Exchange Comparison",
+      "url": "/d/lob-perf-01",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": false
+    },
+    {
+      "title": "Subscribers",
+      "url": "/d/lob-sub-01",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": false
+    }
+  ],
+  "annotations": { "list": [] },
+  "templating": {
+    "list": [
+      {
+        "name": "exchange",
+        "label": "Exchange",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(lob_messages_total, exchange)",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
+        "sort": 1,
+        "hide": 0,
+        "options": [],
+        "current": {}
+      },
+      {
+        "name": "symbol",
+        "label": "Symbol",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(lob_messages_total{exchange=\"$exchange\"}, symbol)",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
+        "sort": 1,
+        "hide": 0,
+        "options": [],
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "$exchange — $symbol Stats",
+      "description": "Live snapshot for the selected exchange and symbol",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(lob_messages_total{exchange=\"$exchange\"}[1m]))",
+          "legendFormat": "msg/s",
+          "refId": "A"
+        },
+        {
+          "expr": "lob_event_lag_milliseconds{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "Event Lag",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "legendFormat": "p99 Processing",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(lob_processing_time_microseconds_sum{exchange=\"$exchange\",symbol=\"$symbol\"}[2m]) / rate(lob_processing_time_microseconds_count{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])",
+          "legendFormat": "Avg Processing",
+          "refId": "D"
+        },
+        {
+          "expr": "lob_orderbook_best_ask_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "Best Ask",
+          "refId": "E"
+        },
+        {
+          "expr": "lob_orderbook_spread_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "Spread",
+          "refId": "F"
+        },
+        {
+          "expr": "lob_process_rss_bytes",
+          "legendFormat": "RSS",
+          "refId": "G"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "msg/s" },
+            "properties": [{ "id": "unit", "value": "reqps" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Event Lag" },
+            "properties": [
+              { "id": "unit", "value": "ms" },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 100 },
+                { "color": "red", "value": 500 }
+              ]}}
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p99 Processing" },
+            "properties": [
+              { "id": "unit", "value": "µs" },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 500 },
+                { "color": "red", "value": 2000 }
+              ]}}
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Avg Processing" },
+            "properties": [{ "id": "unit", "value": "µs" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Best Ask" },
+            "properties": [
+              { "id": "unit", "value": "currencyUSD" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Spread" },
+            "properties": [
+              { "id": "unit", "value": "currencyUSD" },
+              { "id": "decimals", "value": 4 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "RSS" },
+            "properties": [{ "id": "unit", "value": "bytes" }]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Messages / sec by Symbol",
+      "description": "Ingest rate per symbol for $exchange",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "rate(lob_messages_total{exchange=\"$exchange\"}[1m])",
+          "legendFormat": "{{symbol}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Event Lag by Symbol",
+      "description": "Per-symbol event lag for $exchange",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "lob_event_lag_milliseconds{exchange=\"$exchange\"}",
+          "legendFormat": "{{symbol}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 500 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 4,
+      "title": "$symbol Price",
+      "description": "Best ask and best bid from the $exchange order book",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "lob_orderbook_best_ask_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "Best Ask",
+          "refId": "A"
+        },
+        {
+          "expr": "lob_orderbook_best_bid_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "Best Bid",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 5 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 5,
+      "title": "$symbol Spread",
+      "description": "Bid-ask spread for $exchange",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "lob_orderbook_spread_price{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "spread",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Update Processing Time",
+      "description": "p50 / p95 / p99 and mean time to apply one order book update",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by(le) (rate(lob_processing_time_microseconds_bucket{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        },
+        {
+          "expr": "rate(lob_processing_time_microseconds_sum{exchange=\"$exchange\",symbol=\"$symbol\"}[2m]) / rate(lob_processing_time_microseconds_count{exchange=\"$exchange\",symbol=\"$symbol\"}[2m])",
+          "legendFormat": "mean",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "µs",
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500 },
+              { "color": "red", "value": 2000 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 7,
+      "title": "$symbol Order Book Depth",
+      "description": "Number of price levels on each side of the book",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "lob_orderbook_asks_count{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "asks",
+          "refId": "A"
+        },
+        {
+          "expr": "lob_orderbook_bids_count{exchange=\"$exchange\",symbol=\"$symbol\"}",
+          "legendFormat": "bids",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Process RAM (RSS)",
+      "description": "Resident set size — physical memory pages currently mapped by the process",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 28, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "lob_process_rss_bytes",
+          "legendFormat": "RSS",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    }
+  ]
+}
