@@ -291,15 +291,26 @@ TEST(OrderBook, LevelBeyondOfiDepthNotInView) {
 
 TEST(OrderBook, LevelWithinOfiDepthIsInView) {
     // ofiDepth=2: a new ask that beats the current worst ask in the view enters the view.
+    // Because the view is full, the worst level (50003) is evicted and emits a Maintenance delta.
     OrderBook book(2);
     book.applySnapshot(makeSnapshot(100, {{"50002.00", "1.0"}, {"50003.00", "1.0"}}, {}));
 
-    // 50001 beats 50002 (current best ask) — must enter the top-2 view.
+    // 50001 beats 50002 (current best ask) — must enter the top-2 view, evicting 50003.
     auto result =
         book.applyUpdate(makeUpdate(101, 101, {{"50001.00", "0.5"}}, {}), EventKind::Genuine);
     EXPECT_TRUE(result.success);
-    ASSERT_EQ(result.deltas.size(), 1u);
+
+    // Direct delta: 50001 enters the view.
+    ASSERT_GE(result.deltas.size(), 1u);
+    EXPECT_EQ(result.deltas[0].kind, EventKind::Genuine);
     EXPECT_TRUE(result.deltas[0].inOfiView);
+
+    // Maintenance delta: 50003 is evicted from the now-full view.
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_TRUE(result.deltas[1].wasInView);
+    EXPECT_FALSE(result.deltas[1].inOfiView);
+    EXPECT_LT(result.deltas[1].deltaQty, 0LL);  // negative: view qty dropped
 }
 
 // ─── deltaQty semantics ────────────────────────────────────────────────────────
@@ -359,12 +370,19 @@ TEST(OrderBook, OfiViewRefillsWhenLevelRemovedFromView) {
     auto snap = book.getSnapshot();
     EXPECT_EQ(snap.asks.size(), 2u);
 
-    // The removal delta must be Genuine and must have wasInView=true (it was in the view).
-    ASSERT_EQ(result.deltas.size(), 1u);
+    // Direct delta: removal of 50001 (Genuine, was in view, now gone).
+    ASSERT_GE(result.deltas.size(), 1u);
     EXPECT_EQ(result.deltas[0].kind, EventKind::Genuine);
     EXPECT_TRUE(result.deltas[0].wasInView);
-    EXPECT_FALSE(result.deltas[0].inOfiView);  // no longer in view after removal
+    EXPECT_FALSE(result.deltas[0].inOfiView);
     EXPECT_EQ(result.deltas[0].newQty, 0LL);
+
+    // Maintenance delta: 50003 slides into the view as a replacement.
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_FALSE(result.deltas[1].wasInView);
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);  // positive: view qty grew
 }
 
 // ─── OFI formula ──────────────────────────────────────────────────────────────
@@ -386,7 +404,8 @@ TEST(OrderBook, OfiComputationBidMinusAsk) {
 
     long long ofi = 0;
     for (const auto& d : deltas) {
-        if (d.kind == EventKind::Genuine && (d.wasInView || d.inOfiView)) {
+        // Exclude Backfill; include both Genuine and Maintenance (view evictions/replacements).
+        if (d.kind != EventKind::Backfill && (d.wasInView || d.inOfiView)) {
             ofi += d.isBid ? d.deltaQty : -d.deltaQty;
         }
     }

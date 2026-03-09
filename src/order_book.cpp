@@ -47,9 +47,26 @@ void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
 }
 
 UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind) {
-    std::lock_guard<std::mutex> lock(orderBookMutex);
+    // Parse sequence IDs and all level data before acquiring the lock so that
+    // a JSON/parse exception cannot leave the live book half-mutated.
     const long long firstId = update["U"].get<long long>();
     const long long lastId = update["u"].get<long long>();
+    struct ParsedLevel {
+        long long price;
+        long long qty;
+        bool isBid;
+    };
+    std::vector<ParsedLevel> parsed;
+    for (const auto& ask : update["a"]) {
+        parsed.push_back({parseDecimal(ask[0].get<std::string>()),
+                          parseDecimal(ask[1].get<std::string>()), false});
+    }
+    for (const auto& bid : update["b"]) {
+        parsed.push_back({parseDecimal(bid[0].get<std::string>()),
+                          parseDecimal(bid[1].get<std::string>()), true});
+    }
+
+    std::lock_guard<std::mutex> lock(orderBookMutex);
     if (lastId <= lastUpdateId) {
         return {true, {}};
     }
@@ -59,15 +76,8 @@ UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind
     }
     UpdateResult result;
     result.success = true;
-    for (const auto& ask : update["a"]) {
-        long long price = parseDecimal(ask[0].get<std::string>());
-        long long qty = parseDecimal(ask[1].get<std::string>());
-        applyLevelChange(price, qty, false, kind, result.deltas);
-    }
-    for (const auto& bid : update["b"]) {
-        long long price = parseDecimal(bid[0].get<std::string>());
-        long long qty = parseDecimal(bid[1].get<std::string>());
-        applyLevelChange(price, qty, true, kind, result.deltas);
+    for (const auto& lvl : parsed) {
+        applyLevelChange(lvl.price, lvl.qty, lvl.isBid, kind, result.deltas);
     }
     lastUpdateId = lastId;
     return result;
@@ -75,17 +85,27 @@ UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind
 
 std::vector<LevelDelta> OrderBook::applyDelta(const nlohmann::json& bidsArr,
                                               const nlohmann::json& asksArr, EventKind kind) {
-    std::lock_guard<std::mutex> lock(orderBookMutex);
-    std::vector<LevelDelta> deltas;
+    // Parse all level data before acquiring the lock so that a JSON/parse exception
+    // cannot leave the live book half-mutated.
+    struct ParsedLevel {
+        long long price;
+        long long qty;
+        bool isBid;
+    };
+    std::vector<ParsedLevel> parsed;
     for (const auto& bid : bidsArr) {
-        long long price = parseDecimal(bid[0].get<std::string>());
-        long long qty = parseDecimal(bid[1].get<std::string>());
-        applyLevelChange(price, qty, true, kind, deltas);
+        parsed.push_back({parseDecimal(bid[0].get<std::string>()),
+                          parseDecimal(bid[1].get<std::string>()), true});
     }
     for (const auto& ask : asksArr) {
-        long long price = parseDecimal(ask[0].get<std::string>());
-        long long qty = parseDecimal(ask[1].get<std::string>());
-        applyLevelChange(price, qty, false, kind, deltas);
+        parsed.push_back({parseDecimal(ask[0].get<std::string>()),
+                          parseDecimal(ask[1].get<std::string>()), false});
+    }
+
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    std::vector<LevelDelta> deltas;
+    for (const auto& lvl : parsed) {
+        applyLevelChange(lvl.price, lvl.qty, lvl.isBid, kind, deltas);
     }
     return deltas;
 }
@@ -106,23 +126,51 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
     const long long delta = newQty - prevQty;
     if (delta == 0) return;
 
-    // Check if this price was in the OFI view before the update (wasInView).
-    const auto& view = isBid ? ofiBids : ofiAsks;
-    auto inViewCheck = [&](const std::vector<Level>& v) -> bool {
-        if (v.empty()) return false;
-        const bool inRange = isBid ? (price >= v.back().first && price <= v.front().first)
-                                   : (price <= v.back().first && price >= v.front().first);
-        if (!inRange) return false;
-        return std::any_of(v.begin(), v.end(), [price](const Level& l) { return l.first == price; });
+    // Snapshot the OFI view before the update to detect secondary changes
+    // (evictions when a new level enters a full view, replacements after a removal).
+    const std::vector<Level> viewBefore = isBid ? ofiBids : ofiAsks;
+
+    auto inView = [price](const std::vector<Level>& v) -> bool {
+        return std::any_of(v.begin(), v.end(),
+                           [price](const Level& l) { return l.first == price; });
     };
-    const bool wasInView = inViewCheck(view);
+    const bool wasInView = inView(viewBefore);
 
     updateOfiView(price, newQty, isBid);
 
-    // Check if this price is now in the OFI view (after the update).
-    const bool inView = inViewCheck(isBid ? ofiBids : ofiAsks);
+    const std::vector<Level>& viewAfter = isBid ? ofiBids : ofiAsks;
+    const bool nowInView = inView(viewAfter);
 
-    out.push_back(LevelDelta{price, newQty, delta, isBid, wasInView, inView, kind});
+    // Emit the direct delta for the updated price.
+    out.push_back(LevelDelta{price, newQty, delta, isBid, wasInView, nowInView, kind});
+
+    // Emit Maintenance deltas for any other levels whose view membership changed.
+    // deltaQty for Maintenance is the OFI view-contribution change (not a state change):
+    //   eviction:    deltaQty = -lvlQty  (view qty dropped from lvlQty to 0)
+    //   replacement: deltaQty = +lvlQty  (view qty grew from 0 to lvlQty)
+
+    // Evictions: present in viewBefore but absent in viewAfter (excluding updated price).
+    for (const auto& [lvlPrice, lvlQty] : viewBefore) {
+        if (lvlPrice == price) continue;
+        const bool stillIn =
+            std::any_of(viewAfter.begin(), viewAfter.end(),
+                        [lvlPrice](const Level& l) { return l.first == lvlPrice; });
+        if (!stillIn) {
+            out.push_back(
+                LevelDelta{lvlPrice, lvlQty, -lvlQty, isBid, true, false, EventKind::Maintenance});
+        }
+    }
+
+    // Replacements: present in viewAfter but absent in viewBefore (excluding updated price).
+    for (const auto& [lvlPrice, lvlQty] : viewAfter) {
+        if (lvlPrice == price) continue;
+        const bool wasIn = std::any_of(viewBefore.begin(), viewBefore.end(),
+                                       [lvlPrice](const Level& l) { return l.first == lvlPrice; });
+        if (!wasIn) {
+            out.push_back(
+                LevelDelta{lvlPrice, lvlQty, lvlQty, isBid, false, true, EventKind::Maintenance});
+        }
+    }
 }
 
 void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {

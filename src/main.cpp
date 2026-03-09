@@ -269,7 +269,9 @@ int main(int argc, char* argv[]) {
                 // for Genuine events that fall within the OFI view.
                 long long ofi = 0;
                 for (const auto& d : deltas) {
-                    if (d.kind == EventKind::Genuine && (d.wasInView || d.inOfiView)) {
+                    // Include both exchange-originated (Genuine) and secondary view-change
+                    // (Maintenance) deltas. Exclude Backfill (replay) deltas.
+                    if (d.kind != EventKind::Backfill && (d.wasInView || d.inOfiView)) {
                         ofi += d.isBid ? d.deltaQty : -d.deltaQty;
                     }
                 }
