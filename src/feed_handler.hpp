@@ -17,6 +17,7 @@
 #include "i_exchange_adapter.hpp"
 #include "metrics.hpp"
 #include "order_book.hpp"
+#include "symbol_normalizer.hpp"
 
 class BinanceAdapter : public IExchangeAdapter {
 public:
@@ -43,6 +44,10 @@ public:
 private:
     ix::WebSocket webSocket;
     int updateIntervalMs;
+    SymbolNormalizer normalizer_;
+    // Maps Binance-specific stream symbol (e.g. "BTCUSDT") → canonical (e.g. "BTC-USDT").
+    // Populated in start() from the canonical symbols list.
+    std::unordered_map<std::string, std::string> binanceToCanonical_;
 
     std::unordered_map<std::string, std::unique_ptr<OrderBook>>* books = nullptr;
     std::unordered_map<std::string, std::unique_ptr<Metrics>>* metricsMap = nullptr;
@@ -63,10 +68,11 @@ private:
     int snapshotDepth = 1000;
 
     // Fetches a depth snapshot from the Binance REST API and applies it to the order book.
-    // On 429 (rate limited) or 418 (IP banned), sleeps before returning false so the caller
-    // doesn't immediately retry and dig the hole deeper. The sleep is interruptible via stoken.
-    bool fetchAndApplySnapshot(const std::string& symbol, OrderBook& orderBook,
-                               std::stop_token stoken);
+    // binanceSym is the exchange-specific symbol used in the REST URL (e.g. "BTCUSDT").
+    // canonical is the canonical key used for buffer lookup (e.g. "BTC-USDT").
+    // On 429 (rate limited) or 418 (IP banned), sleeps before returning false.
+    bool fetchAndApplySnapshot(const std::string& binanceSym, const std::string& canonical,
+                               OrderBook& orderBook, std::stop_token stoken);
 
     void handleWsMessage(const ix::WebSocketMessagePtr& msg);
 
