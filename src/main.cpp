@@ -16,6 +16,7 @@
 #include "kraken_adapter.hpp"
 #include "metrics.hpp"
 #include "metrics_server.hpp"
+#include "ofi_types.hpp"
 #include "order_book.hpp"
 #include "subscriber_server.hpp"
 
@@ -62,6 +63,31 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "config error: 'snapshot_depth' must be between 5 and 5000\n");
             return -1;
         }
+    }
+
+    // ─── OFI depth (global) ───────────────────────────────────────────────────
+    // Controls how many top price levels per side are tracked in the OFI view.
+    // Must be < snapshot_depth for Kraken to avoid edge-restoration backfill signals.
+    int ofiDepth = 10;
+    if (config.contains("ofi_depth")) {
+        if (!config["ofi_depth"].is_number_integer()) {
+            fprintf(stderr, "config error: 'ofi_depth' must be an integer\n");
+            return -1;
+        }
+        ofiDepth = config["ofi_depth"].get<int>();
+        if (ofiDepth < 1 || ofiDepth > snapshotDepth) {
+            fprintf(stderr, "config error: 'ofi_depth' must be between 1 and snapshot_depth (%d)\n",
+                    snapshotDepth);
+            return -1;
+        }
+    }
+    // Warn if ofi_depth is not strictly less than snapshot_depth: for Kraken the OFI
+    // view must stay inside the subscribed depth window to avoid edge-restoration backfill.
+    if (ofiDepth >= snapshotDepth) {
+        fprintf(stderr,
+                "warning: ofi_depth (%d) >= snapshot_depth (%d); Kraken edge-restoration "
+                "events may corrupt the OFI signal. Consider setting ofi_depth < snapshot_depth.\n",
+                ofiDepth, snapshotDepth);
     }
 
     // ─── Parse per-exchange configs ────────────────────────────────────────────
@@ -175,7 +201,7 @@ int main(int argc, char* argv[]) {
         rt.name = ec.name;
         rt.symbols = ec.symbols;
         for (const auto& sym : ec.symbols) {
-            rt.books[sym] = std::make_unique<OrderBook>();
+            rt.books[sym] = std::make_unique<OrderBook>(static_cast<std::size_t>(ofiDepth));
             rt.metricsMap[sym] = std::make_unique<Metrics>();
         }
         if (ec.name == "binance") {
@@ -212,11 +238,26 @@ int main(int argc, char* argv[]) {
 
     // ─── Register update callbacks and start adapters ─────────────────────────
     for (auto& rt : runtimes) {
-        rt.adapter->setUpdateCallback([&subServer](std::string_view exch, std::string_view symbol,
-                                                   const nlohmann::json& bids,
-                                                   const nlohmann::json& asks, long long ts) {
-            subServer.broadcastUpdate(exch, symbol, bids, asks, ts);
-        });
+        // Capture raw pointer — rt.metricsMap outlives the callback (owned by runtimes).
+        auto* metricsMapPtr = &rt.metricsMap;
+        rt.adapter->setUpdateCallback(
+            [&subServer, metricsMapPtr](std::string_view exch, std::string_view symbol,
+                                        const std::vector<LevelDelta>& deltas, long long ts) {
+                subServer.broadcastUpdate(exch, symbol, deltas, ts);
+
+                // Compute OFI for this update: sum bid deltas minus ask deltas
+                // for Genuine events that fall within the OFI view.
+                long long ofi = 0;
+                for (const auto& d : deltas) {
+                    if (d.kind == EventKind::Genuine && d.inOfiView) {
+                        ofi += d.isBid ? d.deltaQty : -d.deltaQty;
+                    }
+                }
+                auto it = metricsMapPtr->find(std::string(symbol));
+                if (it != metricsMapPtr->end()) {
+                    it->second->lastOfiValue.store(ofi, std::memory_order_relaxed);
+                }
+            });
     }
 
     for (size_t i = 0; i < runtimes.size(); ++i) {

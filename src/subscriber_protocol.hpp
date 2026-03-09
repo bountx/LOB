@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -123,6 +124,15 @@ template <typename Compare>
  * @return nlohmann::json JSON array of two-element string arrays: [[price, qty], ...].
  */
 inline nlohmann::json bookLevelsToJson(const std::map<long long, long long, Compare>& levels) {
+    auto arr = nlohmann::json::array();
+    for (const auto& [price, qty] : levels) {
+        arr.push_back({formatScaled(price), formatScaled(qty)});
+    }
+    return arr;
+}
+
+// Convert a sorted vector of {scaled_price, scaled_qty} pairs to a JSON array.
+inline nlohmann::json bookLevelsToJson(const std::vector<std::pair<long long, long long>>& levels) {
     auto arr = nlohmann::json::array();
     for (const auto& [price, qty] : levels) {
         arr.push_back({formatScaled(price), formatScaled(qty)});

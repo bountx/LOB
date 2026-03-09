@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "nlohmann/json.hpp"
+#include "ofi_types.hpp"
 #include "order_book.hpp"
 #include "subscriber_protocol.hpp"
 #include "subscriber_stats.hpp"
@@ -149,19 +150,24 @@ public:
      * @brief Sends an incremental order-book update to all clients subscribed to the given
      * exchange.symbol stream.
      *
-     * Sends a preformatted update message for the specified exchange and symbol to every connected
-     * client that has subscribed to that stream; may close a client's WebSocket if its send buffer
-     * exceeds the backpressure limit.
+     * Reconstructs bids/asks JSON arrays from the level deltas and sends the preformatted update
+     * message to every connected client subscribed to that stream; may close a client's WebSocket
+     * if its send buffer exceeds the backpressure limit.
      *
      * @param exchange Exchange identifier (e.g., "binance").
      * @param symbol Trading symbol (e.g., "BTCUSDT").
-     * @param bids JSON array of changed bid levels, each element formatted as ["price","qty"].
-     * @param asks JSON array of changed ask levels, each element formatted as ["price","qty"].
+     * @param deltas List of price-level changes from this update (newQty=0 means level removed).
      * @param timestamp Millisecond-resolution timestamp associated with the update.
      */
     void broadcastUpdate(std::string_view exchange, std::string_view symbol,
-                         const nlohmann::json& bids, const nlohmann::json& asks,
-                         long long timestamp) {
+                         const std::vector<LevelDelta>& deltas, long long timestamp) {
+        // Reconstruct bids/asks JSON arrays from the level deltas for wire format.
+        nlohmann::json bids = nlohmann::json::array();
+        nlohmann::json asks = nlohmann::json::array();
+        for (const auto& d : deltas) {
+            (d.isBid ? bids : asks)
+                .push_back({subscriber::formatScaled(d.price), subscriber::formatScaled(d.newQty)});
+        }
         const std::string streamKey = std::string(exchange) + "." + std::string(symbol);
         const std::string msg = subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks);
 

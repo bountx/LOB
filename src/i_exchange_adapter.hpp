@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "metrics.hpp"
+#include "ofi_types.hpp"
 #include "order_book.hpp"
 
 // Interface for exchange feed adapters.
@@ -16,11 +17,10 @@ class IExchangeAdapter {
 public:
     // Called after each successful order book update.
     // exchange: adapter name (e.g. "binance"), symbol: e.g. "BTCUSDT".
-    // bids/asks: JSON arrays of ["price","qty"] changed levels (zero qty = level removed).
+    // deltas: list of price-level changes from this update (inOfiView flag set per delta).
     // ts: event timestamp in milliseconds since epoch.
-    using UpdateCallback =
-        std::function<void(std::string_view exchange, std::string_view symbol,
-                           const nlohmann::json& bids, const nlohmann::json& asks, long long ts)>;
+    using UpdateCallback = std::function<void(std::string_view exchange, std::string_view symbol,
+                                              const std::vector<LevelDelta>& deltas, long long ts)>;
 
     // Register a callback invoked after each successfully applied book update.
     // Must be called before start(). Thread-safe: the callback is invoked from the
@@ -31,9 +31,8 @@ public:
      * thread; the provided function must be safe to call from that thread context.
      *
      * @param cb Callback with signature `void(std::string_view exchange, std::string_view symbol,
-     * const nlohmann::json& bids, const nlohmann::json& asks, long long ts)`; it is called after
-     * each applied update with the exchange name, symbol, bids and asks as JSON, and the update
-     * timestamp.
+     * const std::vector<LevelDelta>& deltas, long long ts)`; it is called after each applied
+     * update with the exchange name, symbol, the list of level deltas, and the update timestamp.
      */
     void setUpdateCallback(UpdateCallback cb) { updateCallback_ = std::move(cb); }
 

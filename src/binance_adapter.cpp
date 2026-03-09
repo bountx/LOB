@@ -114,7 +114,7 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
         std::lock_guard<std::mutex> lock(bufferMutex);
         orderBook.applySnapshot(snapshot);
         for (const auto& msg : symbolBuffers[canonical]) {
-            if (!orderBook.applyUpdate(msg)) {
+            if (!orderBook.applyUpdate(msg, EventKind::Backfill).success) {
                 fprintf(stderr, "[%s] buffered message out of order, resyncing\n",
                         canonical.c_str());
                 symbolBuffers[canonical].clear();
@@ -240,7 +240,8 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
                             .count();
         metrics.lastEventLagMs.store(now - eventTime);
 
-        if (!book.applyUpdate(jsonMsg)) {
+        auto result = book.applyUpdate(jsonMsg, EventKind::Genuine);
+        if (!result.success) {
             printf("[%s] missed updates, resyncing\n", sym.c_str());
             book.clear();
             // Mark as awaiting snapshot so the watchdog skips this symbol
@@ -268,7 +269,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
                                        std::memory_order_relaxed);
 
         if (updateCallback_) {
-            updateCallback_(exchangeName(), sym, jsonMsg["b"], jsonMsg["a"], eventTime);
+            updateCallback_(exchangeName(), sym, result.deltas, eventTime);
         }
     } catch (const std::exception& ex) {
         printf("message error: %s\n", ex.what());

@@ -94,7 +94,7 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
 
     auto bids = kraken::levelsToStringPairs(data["bids"]);
     auto asks = kraken::levelsToStringPairs(data["asks"]);
-    book.applyDelta(bids, asks);
+    auto deltas = book.applyDelta(bids, asks, EventKind::Genuine);
 
     // Event lag: Kraken update timestamp is ISO 8601 in "timestamp" field.
     long long eventMs = 0;
@@ -119,7 +119,7 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
                                    std::memory_order_relaxed);
 
     if (updateCallback_) {
-        updateCallback_(exchangeName(), *canonical, bids, asks, eventMs);
+        updateCallback_(exchangeName(), *canonical, deltas, eventMs);
     }
 }
 
