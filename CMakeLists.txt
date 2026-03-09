@@ -26,7 +26,7 @@ if(NOT BUILD_TESTS_ONLY)
     add_executable(lob_app
         src/main.cpp
         src/order_book.cpp
-        src/feed_handler.cpp
+        src/binance_adapter.cpp
         src/kraken_adapter.cpp
     )
 

@@ -1,4 +1,4 @@
-#include "feed_handler.hpp"
+#include "binance_adapter.hpp"
 
 #include <ixwebsocket/IXHttpClient.h>
 
@@ -401,13 +401,12 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
         std::string binanceSym =
             normalizer_.fromCanonical("binance", canonical).value_or(canonical);
         futures.push_back(std::async(
-            std::launch::async,
-            [this, canonical, binanceSym, maxSnapshotRetries, startStoken]() {
+            std::launch::async, [this, canonical, binanceSym, maxSnapshotRetries, startStoken]() {
                 for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
                     printf("[%s] fetching snapshot (attempt %d/%d)\n", canonical.c_str(), attempt,
                            maxSnapshotRetries);
                     if (fetchAndApplySnapshot(binanceSym, canonical, *books->at(canonical),
-                                             startStoken)) {
+                                              startStoken)) {
                         return true;
                     }
                     if (startStoken.stop_requested() || attempt == maxSnapshotRetries) {

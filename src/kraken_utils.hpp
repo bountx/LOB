@@ -40,13 +40,15 @@ inline long long isoTimestampToMs(const std::string& iso) {
     std::tm tm = {};
     int us = 0;
     // NOLINTNEXTLINE(cert-err34-c)
-    std::sscanf(iso.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d.%dZ", &tm.tm_year, &tm.tm_mon,
-                &tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec, &us);
+    std::sscanf(iso.c_str(), "%4d-%2d-%2dT%2d:%2d:%2d.%dZ", &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+                &tm.tm_hour, &tm.tm_min, &tm.tm_sec, &us);
     tm.tm_year -= 1900;
     tm.tm_mon -= 1;
     tm.tm_isdst = 0;
     time_t t = timegm(&tm);
-    if (t == static_cast<time_t>(-1)) { return 0; }
+    if (t == static_cast<time_t>(-1)) {
+        return 0;
+    }
     return (static_cast<long long>(t) * 1000LL) + (us / 1000);
 }
 
@@ -56,7 +58,9 @@ inline int clampBookDepth(int requested) {
     constexpr std::array<int, 5> kValid = {10, 25, 100, 500, 1000};
     int best = kValid[0];
     for (int v : kValid) {
-        if (v <= requested) { best = v; }
+        if (v <= requested) {
+            best = v;
+        }
     }
     return best;
 }
