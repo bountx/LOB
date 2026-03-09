@@ -209,10 +209,6 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "couldn't bind metrics server on port 9090\n");
         return -1;
     }
-    if (!subServer.start()) {
-        fprintf(stderr, "couldn't bind subscriber server on port 8765\n");
-        return -1;
-    }
 
     // ─── Register update callbacks and start adapters ─────────────────────────
     for (auto& rt : runtimes) {
@@ -223,17 +219,30 @@ int main(int argc, char* argv[]) {
         });
     }
 
+    for (size_t i = 0; i < runtimes.size(); ++i) {
+        if (!runtimes[i].adapter->start(runtimes[i].symbols, runtimes[i].books,
+                                        runtimes[i].metricsMap, snapshotDepth)) {
+            fprintf(stderr, "failed to start %s adapter\n", runtimes[i].name.c_str());
+            for (size_t j = 0; j < i; ++j) {
+                runtimes[j].adapter->stop();
+            }
+            return -1;
+        }
+    }
+
+    // All books are now populated; open the subscriber server to incoming connections.
+    if (!subServer.start()) {
+        fprintf(stderr, "couldn't bind subscriber server on port 8765\n");
+        for (auto& rt : runtimes) {
+            rt.adapter->stop();
+        }
+        return -1;
+    }
+
     printf("metrics at   http://0.0.0.0:9090/metrics\n");
     printf("subscribers  ws://0.0.0.0:8765\n");
     for (const auto& rt : runtimes) {
         printf("exchange:    %s (%zu symbol(s))\n", rt.name.c_str(), rt.symbols.size());
-    }
-
-    for (auto& rt : runtimes) {
-        if (!rt.adapter->start(rt.symbols, rt.books, rt.metricsMap, snapshotDepth)) {
-            fprintf(stderr, "failed to start %s adapter\n", rt.name.c_str());
-            return -1;
-        }
     }
 
     while (true) {

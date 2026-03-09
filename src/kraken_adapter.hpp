@@ -56,6 +56,7 @@ private:
     std::condition_variable snapshotCv_;
 
     int snapshotDepth_ = 1000;
+    bool subscribeError_ = false;
 
     void handleWsMessage(const ix::WebSocketMessagePtr& msg);
     void handleBookSnapshot(const nlohmann::json& data);

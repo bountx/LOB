@@ -1,6 +1,7 @@
 #pragma once
 #include <httplib.h>
 
+#include <cassert>
 #include <functional>
 #include <future>
 #include <memory>
@@ -105,9 +106,12 @@ private:
             subStatsPtr = &subStats;
         }
         std::string result;
+        bool first = true;
         for (const auto& v : views_) {
+            assert(v.metricsMap != nullptr && v.books != nullptr);
             result += buildPrometheusOutput(v.name, *v.metricsMap, *v.books,
-                                            &v == &views_.front() ? subStatsPtr : nullptr);
+                                            first ? subStatsPtr : nullptr, first);
+            first = false;
         }
         return result;
     }

@@ -140,6 +140,22 @@ void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
 
     try {
         auto j = nlohmann::json::parse(msg->str);
+
+        // Handle subscribe acknowledgements before the channel/type/data checks.
+        if (j.contains("method") && j["method"] == "subscribe") {
+            const bool success = !j.contains("success") || j["success"].get<bool>();
+            if (!success) {
+                const std::string errMsg =
+                    j.contains("error") ? j["error"].get<std::string>() : "unknown error";
+                fprintf(stderr, "[kraken] subscribe failed: %s\n", errMsg.c_str());
+                std::lock_guard<std::mutex> lock(snapshotMutex_);
+                subscribeError_ = true;
+                pendingSnapshots_.clear();
+                snapshotCv_.notify_all();
+            }
+            return;
+        }
+
         if (!j.contains("channel") || !j["channel"].is_string()) {
             return;
         }
@@ -217,6 +233,7 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
     }
     {
         std::lock_guard<std::mutex> lock(snapshotMutex_);
+        subscribeError_ = false;
         pendingSnapshots_.clear();
         for (const auto& canonical : symbols) {
             pendingSnapshots_.insert(canonical);
@@ -250,13 +267,17 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
     webSocket_.send(subMsg.dump());
     printf("[kraken] subscribed to %zu symbol(s) at depth %d\n", symbols.size(), snapshotDepth_);
 
-    // Wait until all per-symbol snapshots have been applied.
+    // Wait until all per-symbol snapshots have been applied (or a subscribe error is signalled).
     {
         std::unique_lock<std::mutex> lock(snapshotMutex_);
         const bool ok = snapshotCv_.wait_for(lock, std::chrono::seconds(30),
                                              [this] { return pendingSnapshots_.empty(); });
         if (!ok) {
             fprintf(stderr, "[kraken] timed out waiting for book snapshots\n");
+            webSocket_.stop();
+            return false;
+        }
+        if (subscribeError_) {
             webSocket_.stop();
             return false;
         }
