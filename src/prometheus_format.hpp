@@ -128,7 +128,7 @@ inline std::string buildPrometheusOutput(
 
     {
         const long long scrapeNowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                          std::chrono::system_clock::now().time_since_epoch())
+                                          std::chrono::steady_clock::now().time_since_epoch())
                                           .count();
         std::vector<std::pair<std::string, double>> ageLines;
         for (const auto& [sym, m] : metricsMap) {

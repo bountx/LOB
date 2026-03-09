@@ -252,7 +252,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         metrics.msgCount.fetch_add(1);
         metrics.lastUpdateTimeMs.store(
             std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
+                std::chrono::steady_clock::now().time_since_epoch())
                 .count(),
             std::memory_order_relaxed);
 
@@ -493,7 +493,7 @@ void BinanceAdapter::runWatchdog(std::stop_token stoken) {
         if (stoken.stop_requested()) break;
 
         const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                  std::chrono::system_clock::now().time_since_epoch())
+                                  std::chrono::steady_clock::now().time_since_epoch())
                                   .count();
 
         for (const auto& sym : subscribedSymbols_) {
@@ -506,6 +506,7 @@ void BinanceAdapter::runWatchdog(std::stop_token stoken) {
                         "[binance] stale feed: %s last update %lld ms ago, forcing reconnect\n",
                         sym.c_str(), now - last);
                 webSocket.stop();
+                webSocket.start();
                 break;  // the 0-sentinel set by the Open handler prevents re-triggering
             }
         }

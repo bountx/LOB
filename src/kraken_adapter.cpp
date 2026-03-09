@@ -49,7 +49,7 @@ void KrakenAdapter::handleBookSnapshot(const nlohmann::json& data) {
     auto metricsIt = metricsMap_->find(*canonical);
     if (metricsIt != metricsMap_->end()) {
         const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::system_clock::now().time_since_epoch())
+                                    std::chrono::steady_clock::now().time_since_epoch())
                                     .count();
         metricsIt->second->lastUpdateTimeMs.store(nowMs, std::memory_order_relaxed);
     }
@@ -115,7 +115,7 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
     metrics.msgCount.fetch_add(1);
     metrics.lastUpdateTimeMs.store(
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
+            std::chrono::steady_clock::now().time_since_epoch())
             .count(),
         std::memory_order_relaxed);
 
@@ -303,7 +303,6 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
     webSocket_.setOnMessageCallback(
         [this](const ix::WebSocketMessagePtr& msg) { handleWsMessage(msg); });
     webSocket_.start();
-    watchdogThread_ = std::jthread([this](std::stop_token st) { runWatchdog(st); });
 
     // Wait for WebSocket connection.
     {
@@ -341,6 +340,11 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
             return false;
         }
     }
+
+    // Spawn watchdog only after we are fully connected and have initial snapshots.
+    // This prevents the watchdog from running during the startup window and avoids
+    // leaked threads on connection/snapshot failures.
+    watchdogThread_ = std::jthread([this](std::stop_token st) { runWatchdog(st); });
     return true;
 }
 
@@ -362,7 +366,7 @@ void KrakenAdapter::runWatchdog(std::stop_token stoken) {
         if (stoken.stop_requested()) break;
 
         const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                  std::chrono::system_clock::now().time_since_epoch())
+                                  std::chrono::steady_clock::now().time_since_epoch())
                                   .count();
 
         for (const auto& sym : subscribedSymbols_) {
@@ -375,6 +379,7 @@ void KrakenAdapter::runWatchdog(std::stop_token stoken) {
                         "[kraken] stale feed: %s last update %lld ms ago, forcing reconnect\n",
                         sym.c_str(), now - last);
                 webSocket_.stop();
+                webSocket_.start();
                 break;  // the 0-sentinel set by the Open handler prevents re-triggering
             }
         }
