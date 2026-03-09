@@ -14,7 +14,9 @@ TEST(KrakenUtils, DoubleToString_Fractional) {
     EXPECT_EQ(kraken::doubleToString(0.00001), "0.00001000");
 }
 
-TEST(KrakenUtils, DoubleToString_Zero) { EXPECT_EQ(kraken::doubleToString(0.0), "0.00000000"); }
+TEST(KrakenUtils, DoubleToString_Zero) {
+    EXPECT_EQ(kraken::doubleToString(0.0), "0.00000000");
+}
 
 TEST(KrakenUtils, DoubleToString_NegativeRoundtrip) {
     // Negative prices don't occur in order books, but the function must not crash.
