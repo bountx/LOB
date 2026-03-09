@@ -118,12 +118,38 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
  */
 void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     if (msg->type == ix::WebSocketMessageType::Open) {
-        printf("[kraken] connected\n");
+        bool isReconnect = false;
         {
             std::lock_guard<std::mutex> lock(wsReadyMutex_);
+            isReconnect = wsConnected_;
             wsConnected_ = true;
         }
-        wsReady_.notify_one();
+
+        if (!isReconnect) {
+            printf("[kraken] connected\n");
+            wsReady_.notify_one();
+            return;
+        }
+
+        // Reconnect path: clear stale books, reset snapshot state, re-subscribe.
+        printf("[kraken] reconnected — resubscribing %zu symbol(s)\n", krakenSymbols_.size());
+        for (auto& [sym, book] : *books_) {
+            book->clear();
+        }
+        {
+            std::lock_guard<std::mutex> snapLock(snapshotMutex_);
+            subscribeError_ = false;
+            pendingSnapshots_.clear();
+            for (auto& [sym, _] : *books_) {
+                pendingSnapshots_.insert(sym);
+            }
+        }
+        nlohmann::json subMsg;
+        subMsg["method"] = "subscribe";
+        subMsg["params"]["channel"] = "book";
+        subMsg["params"]["symbol"] = krakenSymbols_;
+        subMsg["params"]["depth"] = snapshotDepth_;
+        webSocket_.send(subMsg.dump());
         return;
     }
     if (msg->type == ix::WebSocketMessageType::Close) {
@@ -239,6 +265,8 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
             pendingSnapshots_.insert(canonical);
         }
     }
+
+    krakenSymbols_ = krakenSymbols;
 
     webSocket_.setUrl("wss://ws.kraken.com/v2");
     webSocket_.setPingInterval(30);

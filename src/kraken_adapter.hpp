@@ -57,6 +57,7 @@ private:
 
     int snapshotDepth_ = 1000;
     bool subscribeError_ = false;
+    std::vector<std::string> krakenSymbols_;  // stored for re-subscription on reconnect
 
     void handleWsMessage(const ix::WebSocketMessagePtr& msg);
     void handleBookSnapshot(const nlohmann::json& data);
