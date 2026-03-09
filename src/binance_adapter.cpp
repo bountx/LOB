@@ -45,6 +45,7 @@ BinanceAdapter::~BinanceAdapter() { stop(); }
  * joins and destroys the resync thread, and stops the WebSocket client.
  */
 void BinanceAdapter::stop() {
+    watchdogThread_ = {};  // request_stop() + join before closing the socket
     resyncThread.request_stop();
     resyncCv.notify_one();
     resyncThread = {};  // join + destroy
@@ -142,10 +143,38 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
  */
 void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     if (msg->type == ix::WebSocketMessageType::Open) {
-        printf("connected\n");
-        std::lock_guard<std::mutex> lock(wsReadyMutex);
-        wsConnected = true;
-        wsReady.notify_one();
+        bool isReconnect = false;
+        {
+            std::lock_guard<std::mutex> lock(wsReadyMutex);
+            isReconnect = wsConnected;
+            wsConnected = true;
+        }
+        if (!isReconnect) {
+            printf("[binance] connected\n");
+            wsReady.notify_one();
+            return;
+        }
+
+        // Reconnect path: discard stale buffers + books, reset sentinels, trigger resync.
+        printf("[binance] reconnected — resyncing %zu symbol(s)\n", subscribedSymbols_.size());
+        {
+            std::lock_guard<std::mutex> lock(bufferMutex);
+            for (const auto& sym : subscribedSymbols_) {
+                symbolBuffers[sym].clear();
+                auto bit = books->find(sym);
+                if (bit != books->end()) bit->second->clear();
+            }
+        }
+        for (const auto& sym : subscribedSymbols_) {
+            auto mit = metricsMap->find(sym);
+            if (mit != metricsMap->end())
+                mit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+        }
+        {
+            std::lock_guard<std::mutex> lock(resyncMutex);
+            for (const auto& sym : subscribedSymbols_) resyncQueue.push(sym);
+        }
+        resyncCv.notify_one();
         return;
     }
     if (msg->type == ix::WebSocketMessageType::Close) {
@@ -221,6 +250,11 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
         metrics.recordProcessingUs(processingUs);
         metrics.msgCount.fetch_add(1);
+        metrics.lastUpdateTimeMs.store(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count(),
+            std::memory_order_relaxed);
 
         if (updateCallback_) {
             updateCallback_(exchangeName(), sym, jsonMsg["b"], jsonMsg["a"], eventTime);
@@ -336,9 +370,14 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
     books = &booksRef;
     metricsMap = &metricsMapRef;
     snapshotDepth = snapshotDepthArg;
+    subscribedSymbols_ = symbols;
 
     for (auto& [sym, book] : *books) {
         book->clear();
+    }
+    // Reset data-age sentinels so the watchdog doesn't fire before first snapshot.
+    for (const auto& sym : symbols) {
+        metricsMapRef.at(sym)->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
     }
     {
         std::lock_guard<std::mutex> lock(bufferMutex);
@@ -384,6 +423,7 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
     resyncThread = std::jthread([this, maxSnapshotRetries](std::stop_token stoken) {
         runResyncWorker(maxSnapshotRetries, stoken);
     });
+    watchdogThread_ = std::jthread([this](std::stop_token st) { runWatchdog(st); });
 
     // Don't fetch all snapshots at once. 30 parallel requests = 300 weight in one burst,
     // which is fine in isolation, but Docker restarts compound this fast enough to earn a 429
@@ -435,4 +475,39 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
         stop();
     }
     return allOk;
+}
+
+/**
+ * @brief Watchdog thread: detects a silently stalled Binance feed and forces a reconnect.
+ *
+ * Checks every 500 ms whether any subscribed symbol has gone longer than 2 s without an update.
+ * lastUpdateTimeMs == 0 means the symbol is waiting for its initial snapshot and is skipped.
+ * On stale detection the WebSocket is stopped; ixwebsocket reconnects to the same stream URL,
+ * the Open handler clears stale state and enqueues all symbols for resync.
+ */
+void BinanceAdapter::runWatchdog(std::stop_token stoken) {
+    constexpr long long kStaleThresholdMs = 2000;
+
+    while (!stoken.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (stoken.stop_requested()) break;
+
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+
+        for (const auto& sym : subscribedSymbols_) {
+            auto it = metricsMap->find(sym);
+            if (it == metricsMap->end()) continue;
+            const long long last = it->second->lastUpdateTimeMs.load(std::memory_order_relaxed);
+            if (last == 0) continue;  // awaiting snapshot after (re)connect — skip
+            if ((now - last) > kStaleThresholdMs) {
+                fprintf(stderr,
+                        "[binance] stale feed: %s last update %lld ms ago, forcing reconnect\n",
+                        sym.c_str(), now - last);
+                webSocket.stop();
+                break;  // the 0-sentinel set by the Open handler prevents re-triggering
+            }
+        }
+    }
 }

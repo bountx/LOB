@@ -4,7 +4,8 @@
 
 struct Metrics {
     std::atomic<long long> msgCount{0};
-    std::atomic<long long> lastEventLagMs{0};  // local_now - message["E"]
+    std::atomic<long long> lastEventLagMs{0};   // local_now - message["E"]
+    std::atomic<long long> lastUpdateTimeMs{0}; // wall-clock ms of last book update; 0 = no data yet
 
     // Histogram for update processing time (µs).
     // Buckets are cumulative (Prometheus convention): each count includes all

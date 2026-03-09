@@ -12,7 +12,10 @@ KrakenAdapter::~KrakenAdapter() { stop(); }
 /**
  * @brief Stops the WebSocket connection.
  */
-void KrakenAdapter::stop() { webSocket_.stop(); }
+void KrakenAdapter::stop() {
+    watchdogThread_ = {};  // request_stop() + join before closing the socket
+    webSocket_.stop();
+}
 
 /**
  * @brief Apply a Kraken book snapshot message for one symbol.
@@ -42,6 +45,14 @@ void KrakenAdapter::handleBookSnapshot(const nlohmann::json& data) {
     snap["bids"] = kraken::levelsToStringPairs(data["bids"]);
     snap["asks"] = kraken::levelsToStringPairs(data["asks"]);
     booksIt->second->applySnapshot(snap);
+
+    auto metricsIt = metricsMap_->find(*canonical);
+    if (metricsIt != metricsMap_->end()) {
+        const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch())
+                                    .count();
+        metricsIt->second->lastUpdateTimeMs.store(nowMs, std::memory_order_relaxed);
+    }
 
     {
         std::lock_guard<std::mutex> lock(snapshotMutex_);
@@ -102,6 +113,11 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
         std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     metrics.recordProcessingUs(processingUs);
     metrics.msgCount.fetch_add(1);
+    metrics.lastUpdateTimeMs.store(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count(),
+        std::memory_order_relaxed);
 
     if (updateCallback_) {
         updateCallback_(exchangeName(), *canonical, bids, asks, eventMs);
@@ -137,6 +153,11 @@ void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             auto it = books_->find(sym);
             if (it != books_->end()) {
                 it->second->clear();
+            }
+            // Reset to 0 so the watchdog skips this symbol while we wait for a new snapshot.
+            auto mit = metricsMap_->find(sym);
+            if (mit != metricsMap_->end()) {
+                mit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
             }
         }
         {
@@ -272,11 +293,17 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
     krakenSymbols_ = krakenSymbols;
     subscribedSymbols_ = symbols;
 
+    // Reset data-age sentinels so the watchdog doesn't fire before first snapshot.
+    for (const auto& canonical : symbols) {
+        metricsMapRef.at(canonical)->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+    }
+
     webSocket_.setUrl("wss://ws.kraken.com/v2");
     webSocket_.setPingInterval(30);
     webSocket_.setOnMessageCallback(
         [this](const ix::WebSocketMessagePtr& msg) { handleWsMessage(msg); });
     webSocket_.start();
+    watchdogThread_ = std::jthread([this](std::stop_token st) { runWatchdog(st); });
 
     // Wait for WebSocket connection.
     {
@@ -315,4 +342,41 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
         }
     }
     return true;
+}
+
+/**
+ * @brief Watchdog thread: detects a silently stalled Kraken feed and forces a reconnect.
+ *
+ * Checks every 500 ms whether any subscribed symbol has gone longer than 2 s without an update
+ * (lastUpdateTimeMs == 0 means the symbol is still waiting for its initial snapshot and is
+ * deliberately skipped). On detection the WebSocket is stopped; ixwebsocket's built-in
+ * auto-reconnect fires the Open handler which re-subscribes and resets all sentinels to 0.
+ * The watchdog skips any symbol with lastUpdateTimeMs == 0, so it stays silent until the
+ * new snapshot lands and re-arms the 2 s timer.
+ */
+void KrakenAdapter::runWatchdog(std::stop_token stoken) {
+    constexpr long long kStaleThresholdMs = 2000;
+
+    while (!stoken.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (stoken.stop_requested()) break;
+
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+
+        for (const auto& sym : subscribedSymbols_) {
+            auto it = metricsMap_->find(sym);
+            if (it == metricsMap_->end()) continue;
+            const long long last = it->second->lastUpdateTimeMs.load(std::memory_order_relaxed);
+            if (last == 0) continue;  // awaiting snapshot after (re)connect — skip
+            if ((now - last) > kStaleThresholdMs) {
+                fprintf(stderr,
+                        "[kraken] stale feed: %s last update %lld ms ago, forcing reconnect\n",
+                        sym.c_str(), now - last);
+                webSocket_.stop();
+                break;  // the 0-sentinel set by the Open handler prevents re-triggering
+            }
+        }
+    }
 }
