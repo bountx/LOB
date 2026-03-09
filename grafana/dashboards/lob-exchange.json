@@ -69,7 +69,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum(rate(lob_messages_total{exchange=\"$exchange\"}[1m]))",
+          "expr": "sum(rate(lob_messages_total{exchange=\"$exchange\",symbol=\"$symbol\"}[1m]))",
           "legendFormat": "msg/s",
           "refId": "A"
         },

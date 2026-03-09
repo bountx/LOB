@@ -13,7 +13,7 @@
   "links": [
     {
       "title": "Exchange Detail",
-      "url": "/d/lob-exch-01",
+      "url": "/d/lob-exch-01?var-exchange=${exchange}&var-symbol=${symbol}",
       "type": "link",
       "icon": "external link",
       "targetBlank": false
@@ -264,14 +264,14 @@
     {
       "id": 7,
       "title": "Current Stats",
-      "description": "Live snapshot — one value per exchange",
+      "description": "Live snapshot — one value per exchange; RSS is process-wide",
       "type": "stat",
       "gridPos": { "x": 0, "y": 24, "w": 24, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "expr": "sum(lob_messages_total)",
-          "legendFormat": "Total Messages",
+          "expr": "sum by(exchange) (lob_messages_total{exchange=~\"$exchange\"})",
+          "legendFormat": "{{exchange}} messages",
           "refId": "A"
         },
         {
