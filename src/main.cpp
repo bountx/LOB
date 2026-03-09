@@ -14,6 +14,7 @@
 #include "binance_adapter.hpp"
 #include "i_exchange_adapter.hpp"
 #include "kraken_adapter.hpp"
+#include "kraken_utils.hpp"
 #include "metrics.hpp"
 #include "metrics_server.hpp"
 #include "ofi_types.hpp"
@@ -173,6 +174,25 @@ int main(int argc, char* argv[]) {
         exchangeConfigs.push_back(std::move(ec));
     }
 
+    // ─── Kraken effective-depth guard ─────────────────────────────────────────
+    // Kraken clamps the subscribed depth to a fixed set of values (10/25/100/500/1000).
+    // The OFI view must fit entirely within that clamped depth; otherwise edge-restoration
+    // events from Kraken will silently enter the OFI view and corrupt the signal.
+    for (const auto& ec : exchangeConfigs) {
+        if (ec.name == "kraken") {
+            const int effectiveKrakenDepth = kraken::clampBookDepth(snapshotDepth);
+            if (ofiDepth >= effectiveKrakenDepth) {
+                fprintf(stderr,
+                        "config error: ofi_depth (%d) >= Kraken effective depth (%d); "
+                        "edge-restoration events will corrupt the OFI signal. "
+                        "Set ofi_depth < %d.\n",
+                        ofiDepth, effectiveKrakenDepth, effectiveKrakenDepth);
+                return -1;
+            }
+            break;
+        }
+    }
+
     // ─── Validate primary_symbol ──────────────────────────────────────────────
     if (!config.contains("primary_symbol") || !config["primary_symbol"].is_string()) {
         fprintf(stderr, "config error: 'primary_symbol' must be a string\n");
@@ -249,7 +269,7 @@ int main(int argc, char* argv[]) {
                 // for Genuine events that fall within the OFI view.
                 long long ofi = 0;
                 for (const auto& d : deltas) {
-                    if (d.kind == EventKind::Genuine && d.inOfiView) {
+                    if (d.kind == EventKind::Genuine && (d.wasInView || d.inOfiView)) {
                         ofi += d.isBid ? d.deltaQty : -d.deltaQty;
                     }
                 }

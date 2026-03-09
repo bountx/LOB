@@ -15,26 +15,31 @@ constexpr double kPriceScale = 100'000'000.0;
 OrderBook::OrderBook(std::size_t ofiDepthArg) : ofiDepth(ofiDepthArg) {}
 
 void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
-    std::lock_guard<std::mutex> lock(orderBookMutex);
-    bidState.clear();
-    askState.clear();
-    ofiBids.clear();
-    ofiAsks.clear();
-    lastUpdateId = snapshot["lastUpdateId"].get<long long>();
+    // Parse into temporaries first so a throw leaves the live book unchanged.
+    const long long newLastUpdateId = snapshot["lastUpdateId"].get<long long>();
+    std::unordered_map<long long, long long> newBids;
+    std::unordered_map<long long, long long> newAsks;
     for (const auto& ask : snapshot["asks"]) {
         long long price = parseDecimal(ask[0].get<std::string>());
         long long qty = parseDecimal(ask[1].get<std::string>());
         if (qty > 0) {
-            askState[price] = qty;
+            newAsks[price] = qty;
         }
     }
     for (const auto& bid : snapshot["bids"]) {
         long long price = parseDecimal(bid[0].get<std::string>());
         long long qty = parseDecimal(bid[1].get<std::string>());
         if (qty > 0) {
-            bidState[price] = qty;
+            newBids[price] = qty;
         }
     }
+    // All parsing succeeded — take the lock and swap atomically.
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    lastUpdateId = newLastUpdateId;
+    bidState = std::move(newBids);
+    askState = std::move(newAsks);
+    ofiBids.clear();
+    ofiAsks.clear();
     rebuildOfiSide(true);
     rebuildOfiSide(false);
     snapshotApplied.store(true);
@@ -101,22 +106,23 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
     const long long delta = newQty - prevQty;
     if (delta == 0) return;
 
+    // Check if this price was in the OFI view before the update (wasInView).
+    const auto& view = isBid ? ofiBids : ofiAsks;
+    auto inViewCheck = [&](const std::vector<Level>& v) -> bool {
+        if (v.empty()) return false;
+        const bool inRange = isBid ? (price >= v.back().first && price <= v.front().first)
+                                   : (price <= v.back().first && price >= v.front().first);
+        if (!inRange) return false;
+        return std::any_of(v.begin(), v.end(), [price](const Level& l) { return l.first == price; });
+    };
+    const bool wasInView = inViewCheck(view);
+
     updateOfiView(price, newQty, isBid);
 
-    // Check if this price is currently in the OFI view (after the update).
-    const auto& view = isBid ? ofiBids : ofiAsks;
-    bool inView = false;
-    if (!view.empty()) {
-        // Range check first (cheap), then linear confirm (only if in range).
-        const bool inRange = isBid ? (price >= view.back().first && price <= view.front().first)
-                                   : (price <= view.back().first && price >= view.front().first);
-        if (inRange) {
-            inView = std::any_of(view.begin(), view.end(),
-                                 [price](const Level& l) { return l.first == price; });
-        }
-    }
+    // Check if this price is now in the OFI view (after the update).
+    const bool inView = inViewCheck(isBid ? ofiBids : ofiAsks);
 
-    out.push_back({price, newQty, delta, isBid, inView, kind});
+    out.push_back(LevelDelta{price, newQty, delta, isBid, wasInView, inView, kind});
 }
 
 void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {

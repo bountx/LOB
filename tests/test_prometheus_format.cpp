@@ -231,9 +231,9 @@ TEST_F(PrometheusFormatTest, DataAgeSkipsZeroSentinelSymbolsInMultiSymbol) {
 // ─── OFI metric ───────────────────────────────────────────────────────────────
 
 TEST_F(PrometheusFormatTest, OfiValueMetricAlwaysEmitted) {
-    // lob_ofi_value is a gauge and must appear even when the value is zero.
+    // lob_ofi_value is a gauge; the labeled data sample must be present even at zero.
     const auto output = build();
-    EXPECT_NE(output.find("lob_ofi_value"), std::string::npos);
+    EXPECT_NE(output.find("lob_ofi_value{"), std::string::npos);
 }
 
 TEST_F(PrometheusFormatTest, OfiValueReflectsStoredValue) {

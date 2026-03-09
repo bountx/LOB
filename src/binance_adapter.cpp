@@ -176,8 +176,10 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         }
         for (const auto& sym : subscribedSymbols_) {
             auto mit = metricsMap->find(sym);
-            if (mit != metricsMap->end())
+            if (mit != metricsMap->end()) {
                 mit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+                mit->second->lastOfiValue.store(0, std::memory_order_relaxed);
+            }
         }
         {
             std::lock_guard<std::mutex> lock(resyncMutex);
@@ -247,6 +249,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             // Mark as awaiting snapshot so the watchdog skips this symbol
             // while runResyncWorker() is already recovering it.
             metrics.lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+            metrics.lastOfiValue.store(0, std::memory_order_relaxed);
             {
                 std::lock_guard<std::mutex> lock(bufferMutex);
                 symbolBuffers[sym].clear();

@@ -17,7 +17,12 @@ class IExchangeAdapter {
 public:
     // Called after each successful order book update.
     // exchange: adapter name (e.g. "binance"), symbol: e.g. "BTCUSDT".
-    // deltas: list of price-level changes from this update (inOfiView flag set per delta).
+    // deltas: mixed-kind list of price-level changes from this update. Consumers MUST inspect
+    //   each LevelDelta::kind (Genuine vs Backfill) and both view flags:
+    //   - wasInView: the level was in the OFI view before this update
+    //   - inOfiView: the level is in the OFI view after this update
+    //   Use (wasInView || inOfiView) to correctly capture entering, in-flight, and removed levels.
+    //   Never assume all deltas are exchange-originated live price changes.
     // ts: event timestamp in milliseconds since epoch.
     using UpdateCallback = std::function<void(std::string_view exchange, std::string_view symbol,
                                               const std::vector<LevelDelta>& deltas, long long ts)>;

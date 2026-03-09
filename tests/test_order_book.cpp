@@ -358,13 +358,21 @@ TEST(OrderBook, OfiViewRefillsWhenLevelRemovedFromView) {
     // The snapshot must contain both remaining levels.
     auto snap = book.getSnapshot();
     EXPECT_EQ(snap.asks.size(), 2u);
+
+    // The removal delta must be Genuine and must have wasInView=true (it was in the view).
+    ASSERT_EQ(result.deltas.size(), 1u);
+    EXPECT_EQ(result.deltas[0].kind, EventKind::Genuine);
+    EXPECT_TRUE(result.deltas[0].wasInView);
+    EXPECT_FALSE(result.deltas[0].inOfiView);  // no longer in view after removal
+    EXPECT_EQ(result.deltas[0].newQty, 0LL);
 }
 
 // ─── OFI formula ──────────────────────────────────────────────────────────────
 
 TEST(OrderBook, OfiComputationBidMinusAsk) {
     // Verify that a consumer can compute OFI = sum(bid deltas) - sum(ask deltas)
-    // for Genuine, inOfiView deltas and get the correct signed value.
+    // for Genuine deltas that touched the OFI view (wasInView || inOfiView).
+    // In this case both levels remain in the view so inOfiView alone is sufficient.
     OrderBook book;
     book.applySnapshot(makeSnapshot(100, {{"50001.00", "1.0"}}, {{"49999.00", "1.0"}}));
 
@@ -378,7 +386,7 @@ TEST(OrderBook, OfiComputationBidMinusAsk) {
 
     long long ofi = 0;
     for (const auto& d : deltas) {
-        if (d.kind == EventKind::Genuine && d.inOfiView) {
+        if (d.kind == EventKind::Genuine && (d.wasInView || d.inOfiView)) {
             ofi += d.isBid ? d.deltaQty : -d.deltaQty;
         }
     }

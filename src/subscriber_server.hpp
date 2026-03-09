@@ -161,13 +161,16 @@ public:
      */
     void broadcastUpdate(std::string_view exchange, std::string_view symbol,
                          const std::vector<LevelDelta>& deltas, long long timestamp) {
-        // Reconstruct bids/asks JSON arrays from the level deltas for wire format.
+        // Reconstruct bids/asks JSON arrays from Genuine level deltas only.
+        // Backfill and synthetic OFI-maintenance entries must not be sent to subscribers.
         nlohmann::json bids = nlohmann::json::array();
         nlohmann::json asks = nlohmann::json::array();
         for (const auto& d : deltas) {
+            if (d.kind != EventKind::Genuine) continue;
             (d.isBid ? bids : asks)
                 .push_back({subscriber::formatScaled(d.price), subscriber::formatScaled(d.newQty)});
         }
+        if (bids.empty() && asks.empty()) return;
         const std::string streamKey = std::string(exchange) + "." + std::string(symbol);
         const std::string msg = subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks);
 
