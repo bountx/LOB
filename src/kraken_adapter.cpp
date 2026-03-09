@@ -113,11 +113,10 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
         std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     metrics.recordProcessingUs(processingUs);
     metrics.msgCount.fetch_add(1);
-    metrics.lastUpdateTimeMs.store(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count(),
-        std::memory_order_relaxed);
+    metrics.lastUpdateTimeMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now().time_since_epoch())
+                                       .count(),
+                                   std::memory_order_relaxed);
 
     if (updateCallback_) {
         updateCallback_(exchangeName(), *canonical, bids, asks, eventMs);
@@ -378,9 +377,16 @@ void KrakenAdapter::runWatchdog(std::stop_token stoken) {
                 fprintf(stderr,
                         "[kraken] stale feed: %s last update %lld ms ago, forcing reconnect\n",
                         sym.c_str(), now - last);
+                // Clear sentinels immediately so the watchdog skips all symbols
+                // during the reconnect window before the Open handler fires.
+                for (const auto& s : subscribedSymbols_) {
+                    auto sit = metricsMap_->find(s);
+                    if (sit != metricsMap_->end())
+                        sit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+                }
                 webSocket_.stop();
                 webSocket_.start();
-                break;  // the 0-sentinel set by the Open handler prevents re-triggering
+                break;
             }
         }
     }

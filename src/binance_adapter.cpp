@@ -234,6 +234,9 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         if (!book.applyUpdate(jsonMsg)) {
             printf("[%s] missed updates, resyncing\n", sym.c_str());
             book.clear();
+            // Mark as awaiting snapshot so the watchdog skips this symbol
+            // while runResyncWorker() is already recovering it.
+            metrics.lastUpdateTimeMs.store(0, std::memory_order_relaxed);
             {
                 std::lock_guard<std::mutex> lock(bufferMutex);
                 symbolBuffers[sym].clear();
@@ -250,11 +253,10 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
         metrics.recordProcessingUs(processingUs);
         metrics.msgCount.fetch_add(1);
-        metrics.lastUpdateTimeMs.store(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count(),
-            std::memory_order_relaxed);
+        metrics.lastUpdateTimeMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now().time_since_epoch())
+                                           .count(),
+                                       std::memory_order_relaxed);
 
         if (updateCallback_) {
             updateCallback_(exchangeName(), sym, jsonMsg["b"], jsonMsg["a"], eventTime);
@@ -423,7 +425,6 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
     resyncThread = std::jthread([this, maxSnapshotRetries](std::stop_token stoken) {
         runResyncWorker(maxSnapshotRetries, stoken);
     });
-    watchdogThread_ = std::jthread([this](std::stop_token st) { runWatchdog(st); });
 
     // Don't fetch all snapshots at once. 30 parallel requests = 300 weight in one burst,
     // which is fine in isolation, but Docker restarts compound this fast enough to earn a 429
@@ -473,8 +474,12 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
     }
     if (!allOk) {
         stop();
+        return false;
     }
-    return allOk;
+    // Start the watchdog only after all initial snapshots have succeeded so it
+    // doesn't run during the startup window or leak a thread on failure paths.
+    watchdogThread_ = std::jthread([this](std::stop_token st) { runWatchdog(st); });
+    return true;
 }
 
 /**
@@ -505,9 +510,16 @@ void BinanceAdapter::runWatchdog(std::stop_token stoken) {
                 fprintf(stderr,
                         "[binance] stale feed: %s last update %lld ms ago, forcing reconnect\n",
                         sym.c_str(), now - last);
+                // Clear sentinels immediately so the watchdog skips all symbols
+                // during the reconnect window before the Open handler fires.
+                for (const auto& s : subscribedSymbols_) {
+                    auto sit = metricsMap->find(s);
+                    if (sit != metricsMap->end())
+                        sit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+                }
                 webSocket.stop();
                 webSocket.start();
-                break;  // the 0-sentinel set by the Open handler prevents re-triggering
+                break;
             }
         }
     }

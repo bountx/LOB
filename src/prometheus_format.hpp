@@ -134,7 +134,8 @@ inline std::string buildPrometheusOutput(
         for (const auto& [sym, m] : metricsMap) {
             const long long last = m->lastUpdateTimeMs.load();
             if (last == 0) continue;  // no data yet / reconnecting
-            ageLines.emplace_back(sym, (scrapeNowMs - last) / 1000.0);
+            const double age = std::max(0.0, (scrapeNowMs - last) / 1000.0);
+            ageLines.emplace_back(sym, age);
         }
         if (!ageLines.empty()) {
             writeGaugeHeader("lob_feed_data_age_seconds",
