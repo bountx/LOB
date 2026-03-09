@@ -132,15 +132,18 @@ void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         }
 
         // Reconnect path: clear stale books, reset snapshot state, re-subscribe.
-        printf("[kraken] reconnected — resubscribing %zu symbol(s)\n", krakenSymbols_.size());
-        for (auto& [sym, book] : *books_) {
-            book->clear();
+        printf("[kraken] reconnected — resubscribing %zu symbol(s)\n", subscribedSymbols_.size());
+        for (const auto& sym : subscribedSymbols_) {
+            auto it = books_->find(sym);
+            if (it != books_->end()) {
+                it->second->clear();
+            }
         }
         {
             std::lock_guard<std::mutex> snapLock(snapshotMutex_);
             subscribeError_ = false;
             pendingSnapshots_.clear();
-            for (auto& [sym, _] : *books_) {
+            for (const auto& sym : subscribedSymbols_) {
                 pendingSnapshots_.insert(sym);
             }
         }
@@ -267,6 +270,7 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
     }
 
     krakenSymbols_ = krakenSymbols;
+    subscribedSymbols_ = symbols;
 
     webSocket_.setUrl("wss://ws.kraken.com/v2");
     webSocket_.setPingInterval(30);
