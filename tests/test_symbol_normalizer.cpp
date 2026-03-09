@@ -65,7 +65,7 @@ TEST(SymbolNormalizer, BinanceAutoToCanonical_EUR) {
     EXPECT_EQ(*r, "BTC-EUR");
 }
 
-TEST(SymbolNormalizer, BinanceAutoToCanonical_BUSD) {
+TEST(SymbolNormalizer, BinanceAutoToCanonical_SOL) {
     SymbolNormalizer n;
     auto r = n.toCanonical("binance", "SOLUSDT");
     ASSERT_TRUE(r.has_value());
