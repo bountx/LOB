@@ -149,7 +149,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "none",
           "decimals": 2,
           "color": { "mode": "palette-classic" },
           "custom": { "lineWidth": 2, "fillOpacity": 5 }
@@ -177,7 +177,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
+          "unit": "none",
           "decimals": 4,
           "color": { "mode": "palette-classic" },
           "custom": { "lineWidth": 2, "fillOpacity": 10 }
@@ -191,8 +191,8 @@
     },
     {
       "id": 5,
-      "title": "Processing Time p99",
-      "description": "99th percentile order book update processing time per exchange",
+      "title": "Processing Time p99 / p50",
+      "description": "99th and 50th percentile order book update processing time per exchange",
       "type": "timeseries",
       "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -314,7 +314,7 @@
           {
             "matcher": { "id": "byRegexp", "options": ".* spread" },
             "properties": [
-              { "id": "unit", "value": "currencyUSD" },
+              { "id": "unit", "value": "none" },
               { "id": "decimals", "value": 4 }
             ]
           },

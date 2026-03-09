@@ -63,7 +63,7 @@
     {
       "id": 1,
       "title": "$exchange — $symbol Stats",
-      "description": "Live snapshot for the selected exchange and symbol",
+      "description": "Live snapshot for the selected exchange and symbol. Note: RSS is process-wide and not scoped to exchange/symbol.",
       "type": "stat",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -147,14 +147,14 @@
           {
             "matcher": { "id": "byName", "options": "Best Ask" },
             "properties": [
-              { "id": "unit", "value": "currencyUSD" },
+              { "id": "unit", "value": "none" },
               { "id": "decimals", "value": 2 }
             ]
           },
           {
             "matcher": { "id": "byName", "options": "Spread" },
             "properties": [
-              { "id": "unit", "value": "currencyUSD" },
+              { "id": "unit", "value": "none" },
               { "id": "decimals", "value": 4 }
             ]
           },
