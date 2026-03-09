@@ -3,129 +3,24 @@
 [![Tests](https://github.com/bountx/LOB/actions/workflows/test.yml/badge.svg)](https://github.com/bountx/LOB/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/bountx/LOB/badge.svg?branch=main&kill_cache=1)](https://coveralls.io/github/bountx/LOB?branch=main&kill_cachee=2)
 
-A self-hosted WebSocket server that connects to multiple crypto exchanges, maintains live limit order books, and re-broadcasts normalized data to any number of subscribers. Run it on a $6 VPS and point your trading scripts, dashboards, or ML pipelines at it.
-
-## The problem it solves
-
-Professional market data (Kaiko, Tardis, CoinAPI) costs hundreds per month. Free exchange APIs have aggressive rate limits — Binance allows one snapshot every ~10 seconds per symbol before you get 429'd, and each connection has stream limits. When you need 50+ symbols across multiple exchanges, you either pay or you build something.
-
-This server handles the exchange complexity once, centrally, and lets any number of clients subscribe to clean normalized feeds — no exchange credentials, no rate limit exposure, no per-client reconnect logic.
-
-## How it works
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Exchange Adapters                     │
-│  Binance ──┐                                            │
-│  Kraken  ──┼──→ Symbol normalizer → Unified book store  │
-│  Coinbase──┘         BTC-USDT           BTC-USDT        │
-│                      ETH-USDT           ETH-USDT        │
-└─────────────────────────────┬───────────────────────────┘
-                              │ fan-out (non-blocking)
-              ┌───────────────┴────────────────┐
-              ↓                                ↓
-        subscriber A                     subscriber B
-   (trading script)                  (Grafana/dashboard)
-```
-
-Each exchange runs its own adapter: independent WebSocket connection, snapshot/resync logic, and rate limit handling. Updates flow into the unified book store and are fanned out to all active subscribers without blocking ingestion.
-
-## Subscription API
-
-Connect to `ws://your-host:8765` and send:
-
-```json
-{"op": "subscribe", "streams": ["binance.BTCUSDT.book", "kraken.XBTUSDT.book"]}
-```
-
-Receive on subscribe — a full snapshot:
-```json
-{
-  "type": "snapshot",
-  "exchange": "binance",
-  "symbol": "BTC-USDT",
-  "ts": 1712000000000,
-  "bids": [["94500.00", "1.230"], ["94499.50", "0.800"]],
-  "asks": [["94501.00", "0.540"], ["94501.50", "2.100"]]
-}
-```
-
-Then incremental updates:
-```json
-{
-  "type": "update",
-  "exchange": "binance",
-  "symbol": "BTC-USDT",
-  "ts": 1712000000123,
-  "bids": [["94500.00", "0.000"]],
-  "asks": [["94502.00", "1.800"]]
-}
-```
-
-Zero quantity means the level was removed. Same format regardless of which exchange the data came from.
-
-Subscribe to the unified stream to get best prices aggregated across all exchanges tracking a symbol:
-
-```json
-{"op": "subscribe", "streams": ["unified.BTC-USDT.book"]}
-```
-
-## Why C++, why not Cryptofeed
-
-[Cryptofeed](https://github.com/bmoscon/cryptofeed) solves the ingestion problem well in Python. What it doesn't do is serve that data to subscribers. Hooking up 20 client scripts to 20 separate Cryptofeed processes is messy; running a single server that they all connect to is better.
-
-The C++ matters for the serving layer specifically. Fan-out to N subscribers while maintaining ingestion from M exchanges without either side blocking the other is a concurrency problem. Python's GIL and async model make this awkward at scale. Here it's a few std::threads and a lock-free queue, using ~40MB RAM for 5 exchanges and 50 symbols where a Python equivalent would use 400MB+.
-
-## Realistic scale (on a 4GB VPS)
-
-| Exchanges | Symbols each | Msg/s in | Subscribers | RAM |
-|-----------|-------------|----------|-------------|-----|
-| 1         | 50          | ~500     | 20          | ~60MB |
-| 3         | 30 each     | ~900     | 50          | ~120MB |
-| 5         | 20 each     | ~1000    | 100         | ~180MB |
-
-Binance rate-limits REST snapshots (depth 1000 = 50 weight, limit 6000/min). Spreading symbols across multiple exchanges distributes this pressure naturally — Binance, Kraken, and Coinbase each handle their own rate limits independently.
-
-## Current status
-
-The Binance ingestion layer and order book core are production-ready. The subscriber server and multi-exchange adapter interface are the next pieces.
-
-```
-[DONE]  Binance WebSocket adapter (multi-symbol, snapshot + resync)
-[DONE]  Order book core — apply diffs, maintain sorted levels
-[DONE]  Prometheus metrics + Grafana dashboard
-[DONE]  Docker Compose deployment
-
-[DONE]  IExchangeAdapter interface — common contract for all exchanges
-[DONE]  Subscriber WebSocket server — fan-out with per-client backpressure
-[NEXT]  Symbol normalization — canonical names across exchanges
-[NEXT]     Kraken adapter
-[NEXT]     Coinbase adapter
-[ ]     Unified book (aggregated best prices across exchanges)
-[ ]     Parquet recording — write book snapshots to disk for offline analysis
-[ ]     Python client library — subscribe and get Pandas DataFrames
-[ ]     OKX, Bybit adapters
-```
+Connects to Binance and Kraken, maintains live order books, and re-broadcasts normalized updates over WebSocket to any number of subscribers.
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/yourname/lob
-cd lob
-cp .env.example .env
-# Edit .env: set SYMBOLS, add exchange API keys if needed
+# edit config.json, then:
 docker compose up -d
 ```
 
-Subscribe from Python:
+Subscribe:
 ```python
 import websockets, asyncio, json
 
 async def main():
-    async with websockets.connect("ws://your-vps:8765") as ws:
+    async with websockets.connect("ws://localhost:8765") as ws:
         await ws.send(json.dumps({
             "op": "subscribe",
-            "streams": ["binance.BTCUSDT.book", "kraken.XBTUSDT.book"]
+            "streams": ["binance.BTC-USDT.book", "kraken.BTC-USDT.book"]
         }))
         async for msg in ws:
             print(json.loads(msg))
@@ -133,28 +28,127 @@ async def main():
 asyncio.run(main())
 ```
 
+## Subscription protocol
+
+Stream format: `{exchange}.{CANONICAL-SYMBOL}.book`
+
+On subscribe — full snapshot:
+```json
+{"type":"snapshot","exchange":"binance","symbol":"BTC-USDT","ts":1712000000000,
+ "bids":[["94500.00000000","1.23000000"]],"asks":[["94501.00000000","0.54000000"]]}
+```
+
+Then incremental updates. `"0"` quantity means the level was removed:
+```json
+{"type":"update","exchange":"binance","symbol":"BTC-USDT","ts":1712000000123,
+ "bids":[["94500.00000000","0"]],"asks":[["94502.00000000","1.80000000"]]}
+```
+
+Unsubscribe:
+```json
+{"op": "unsubscribe", "streams": ["binance.BTC-USDT.book"]}
+```
+
 ## Configuration
 
-| Variable | Default | Description |
+`config.json` in the working directory (or pass path as first argument):
+
+```json
+{
+  "exchanges": [
+    {
+      "name": "binance",
+      "update_interval_ms": 100,
+      "symbols": ["BTC-USDT", "ETH-USDT"]
+    },
+    {
+      "name": "kraken",
+      "symbols": ["BTC-USDT", "ETH-USDT"]
+    }
+  ],
+  "snapshot_depth": 1000,
+  "primary_symbol": "BTC-USDT"
+}
+```
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `exchanges[].name` | Yes | — | `"binance"` or `"kraken"` |
+| `exchanges[].symbols` | Yes | — | Canonical `BASE-QUOTE` symbols |
+| `exchanges[].update_interval_ms` | Binance only | `100` | `100` or `1000` |
+| `snapshot_depth` | No | `1000` | Depth per side. Kraken clamps to 10/25/100/500/1000. |
+| `primary_symbol` | Yes | — | Must appear in at least one exchange |
+
+## Exchange specifications
+
+### Binance
+
+- **WebSocket:** `wss://stream.binance.com:9443/stream?streams=btcusdt@depth@100ms`
+- **Snapshot:** REST `GET /api/v3/depth?symbol=BTCUSDT&limit=1000` (50 weight; limit 6000/min)
+- **Book model:** Unmanaged — event-sourced diffs applied on top of a REST snapshot. Book starts at `snapshot_depth` levels and **grows over time** (3k–10k+ per side) as the market explores new price ranges.
+- **Sequence checking:** Yes (`U`/`u` fields). On gap: clears book, re-fetches REST snapshot, replays buffered messages.
+- **Rate limits:** 429 → waits `Retry-After`; 418 (IP ban) → longer wait. Handled automatically.
+- **Symbol format:** `BTCUSDT` ↔ `BTC-USDT` (auto strip/insert `-`). Supported quote suffixes: `USDT BUSD USDC USD BTC ETH BNB EUR`.
+
+### Kraken
+
+- **WebSocket:** `wss://ws.kraken.com/v2`
+- **Snapshot:** Delivered via WebSocket after subscribe (no REST call).
+- **Book model:** Managed — Kraken maintains exactly `depth` levels server-side. When a level is consumed or cancelled, Kraken automatically sends a replacement from deeper in the book (**backfill**). Book depth is always stable at the subscribed value.
+- **Sequence checking:** None — Kraken guarantees ordering.
+- **Supported depths:** 10, 25, 100, 500, 1000 (requested depth is clamped down to nearest).
+- **Backfill events:** When a top-of-book level is consumed, the same update message contains both the removal and a new level at the outer window boundary. This new level is a real resting order from the full book, not a new arrival — it was already there, just outside the visible window.
+- **Symbol format:** `BTC/USDT` ↔ `BTC-USDT` (swap `/`↔`-`). Kraken's legacy `XBT` ticker maps to canonical `BTC`.
+
+### Binance vs Kraken — key differences
+
+| | Binance | Kraken |
 |---|---|---|
-| `BINANCE_SYMBOLS` | `BTCUSDT,ETHUSDT` | Symbols to track on Binance |
-| `KRAKEN_SYMBOLS` | `` | Symbols to track on Kraken (when adapter is ready) |
-| `SNAPSHOT_DEPTH` | `1000` | Order book depth per side |
-| `SUBSCRIBER_PORT` | `8765` | WebSocket server port for subscribers |
-| `METRICS_PORT` | `9090` | Prometheus metrics port |
+| Book size over time | Grows (3k–10k+ levels) | Fixed at subscribed depth |
+| All updates are new order arrivals? | Yes | No — outer-boundary additions are backfills |
+| Resync needed? | Yes, on sequence gap | No |
+
+## Prometheus metrics
+
+Available at `http://your-host:9090/metrics`. All labeled by `exchange` and `symbol`.
+
+| Metric | Type | Description |
+|---|---|---|
+| `lob_messages_total` | counter | WebSocket messages processed |
+| `lob_event_lag_milliseconds` | gauge | Exchange timestamp → local receipt |
+| `lob_processing_time_microseconds` | gauge | Last update processing time |
+| `lob_max_processing_time_microseconds` | gauge | Peak processing time |
+| `lob_orderbook_bids_count` | gauge | Bid levels in book |
+| `lob_orderbook_asks_count` | gauge | Ask levels in book |
+| `lob_orderbook_best_bid_price` | gauge | Best bid |
+| `lob_orderbook_best_ask_price` | gauge | Best ask |
+| `lob_orderbook_spread_price` | gauge | Spread (emitted only when book is populated) |
+
+`GET /health` → `200 OK`
+
+Grafana dashboard auto-provisioned at `http://your-host:3000` (admin/admin).
 
 ## Build locally
 
-Requires vcpkg at `~/vcpkg`.
+Requires [vcpkg](https://github.com/microsoft/vcpkg) at `~/vcpkg`.
 
 ```bash
 cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake"
 cmake --build build
-./build/lob_app
+./build/lob_app config.json
 ```
 
-## Grafana dashboard
+Dependencies (`vcpkg.json`): `ixwebsocket`, `nlohmann-json`, `cpp-httplib`.
 
-Tracks per-exchange, per-symbol: message rate, processing latency, best bid/ask, spread, and book depth. Auto-provisioned on `docker compose up`.
+## Status
 
-Grafana: `http://your-vps:3000` (admin/admin on first login)
+- [x] Binance and Kraken adapters
+- [x] Subscriber WebSocket server
+- [x] Prometheus metrics + Grafana dashboard
+- [x] Docker Compose deployment
+- [ ] OFI delta layer — genuine vs backfill event classification per level
+- [ ] Data recording — write order book update stream to Parquet for offline use
+- [ ] Data replay — re-emit recorded updates for strategy backtesting over a fixed time window
+- [ ] Python client library
+- [ ] Unified cross-exchange book
+- [ ] Additional exchanges
