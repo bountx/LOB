@@ -28,8 +28,7 @@ public:
 
     // Convert an exchange-specific symbol to canonical form.
     // Returns nullopt if no mapping and no auto-rule applies.
-    std::optional<std::string> toCanonical(std::string_view exchange,
-                                           std::string_view local) const;
+    std::optional<std::string> toCanonical(std::string_view exchange, std::string_view local) const;
 
     // Convert a canonical symbol to the exchange-specific form.
     // Returns nullopt if no mapping and no auto-rule applies.
@@ -46,18 +45,19 @@ private:
         return k;
     }
 
-    std::unordered_map<std::string, std::string> toCanonicalMap_;    // "exchange\x01local" → canonical
-    std::unordered_map<std::string, std::string> fromCanonicalMap_;  // "exchange\x01canonical" → local
+    std::unordered_map<std::string, std::string>
+        toCanonicalMap_;  // "exchange\x01local" → canonical
+    std::unordered_map<std::string, std::string>
+        fromCanonicalMap_;  // "exchange\x01canonical" → local
 };
 
-inline void SymbolNormalizer::add(std::string exchange, std::string local,
-                                   std::string canonical) {
+inline void SymbolNormalizer::add(std::string exchange, std::string local, std::string canonical) {
     toCanonicalMap_[makeKey(exchange, local)] = canonical;
     fromCanonicalMap_[makeKey(exchange, canonical)] = local;
 }
 
 inline std::optional<std::string> SymbolNormalizer::toCanonical(std::string_view exchange,
-                                                                  std::string_view local) const {
+                                                                std::string_view local) const {
     auto it = toCanonicalMap_.find(makeKey(exchange, local));
     if (it != toCanonicalMap_.end()) return it->second;
 
@@ -76,12 +76,11 @@ inline std::optional<std::string> SymbolNormalizer::toCanonical(std::string_view
     if (exchange == "binance") {
         // Split by trying common quote-currency suffixes; longest suffixes first to
         // avoid mis-matching (e.g. "USDT" before "USD" prevents "BTCUSDT" → "BTCUSD-T").
-        static constexpr std::string_view kQuotes[] = {
-            "USDT", "BUSD", "USDC", "USD", "BTC", "ETH", "BNB", "EUR"};
+        static constexpr std::string_view kQuotes[] = {"USDT", "BUSD", "USDC", "USD",
+                                                       "BTC",  "ETH",  "BNB",  "EUR"};
         for (std::string_view q : kQuotes) {
             if (local.size() > q.size() && local.substr(local.size() - q.size()) == q) {
-                return std::string(local.substr(0, local.size() - q.size())) + "-" +
-                       std::string(q);
+                return std::string(local.substr(0, local.size() - q.size())) + "-" + std::string(q);
             }
         }
     }

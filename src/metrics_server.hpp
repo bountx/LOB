@@ -1,6 +1,7 @@
 #pragma once
 #include <httplib.h>
 
+#include <cassert>
 #include <functional>
 #include <future>
 #include <memory>
@@ -9,33 +10,34 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "metrics.hpp"
 #include "order_book.hpp"
 #include "prometheus_format.hpp"
 #include "subscriber_stats.hpp"
 
+struct ExchangeMetricsView {
+    std::string name;
+    const std::unordered_map<std::string, std::unique_ptr<Metrics>>* metricsMap;
+    const std::unordered_map<std::string, std::unique_ptr<OrderBook>>* books;
+};
+
 class MetricsServer {
 public:
     /**
-     * @brief Construct a MetricsServer that serves Prometheus metrics and health for an exchange.
+     * @brief Construct a MetricsServer that serves Prometheus metrics and health for one or more
+     * exchanges.
      *
-     * @param exchange Identifier of the exchange whose metrics will be exposed.
-     * @param metricsMap Reference to the map of metric objects indexed by symbol; the server stores
-     * this reference and reads metrics from it.
-     * @param books Reference to the map of order books indexed by symbol; the server stores this
-     * reference and reads book state from it.
+     * @param views Per-exchange views; each view holds a name and non-owning pointers to its
+     * metrics and order-book maps. Subscriber stats are emitted only for the first view to avoid
+     * duplicating process-wide metrics.
      * @param port TCP port to bind the HTTP metrics/health server to (default 9090).
+     * @param subStatsFn Optional callback returning subscriber server counters for the scrape.
      */
-    MetricsServer(std::string_view exchange,
-                  std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
-                  std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
-                  int port = 9090, std::function<SubscriberStats()> subStatsFn = nullptr)
-        : exchange(exchange),
-          metricsMap(metricsMap),
-          books(books),
-          port(port),
-          subStatsFn_(std::move(subStatsFn)) {}
+    MetricsServer(std::vector<ExchangeMetricsView> views, int port = 9090,
+                  std::function<SubscriberStats()> subStatsFn = nullptr)
+        : views_(std::move(views)), port(port), subStatsFn_(std::move(subStatsFn)) {}
 
     /**
      * @brief Stop the internal HTTP server and join the worker thread.
@@ -88,10 +90,10 @@ public:
 
 private:
     /**
-     * @brief Produce Prometheus-formatted metrics for the server's configured exchange.
+     * @brief Produce Prometheus-formatted metrics for all configured exchanges.
      *
-     * Builds the full Prometheus exposition text representing the current state of the stored
-     * metrics and order books for the exchange associated with this MetricsServer.
+     * Iterates over all views and concatenates their Prometheus exposition text. Subscriber stats
+     * are included only for the first view to avoid duplicating process-wide metrics.
      *
      * @return std::string Prometheus exposition body ready to be served (plain text in Prometheus
      * format).
@@ -103,12 +105,18 @@ private:
             subStats = subStatsFn_();
             subStatsPtr = &subStats;
         }
-        return buildPrometheusOutput(exchange, metricsMap, books, subStatsPtr);
+        std::string result;
+        bool first = true;
+        for (const auto& v : views_) {
+            assert(v.metricsMap != nullptr && v.books != nullptr);
+            result += buildPrometheusOutput(v.name, *v.metricsMap, *v.books,
+                                            first ? subStatsPtr : nullptr, first);
+            first = false;
+        }
+        return result;
     }
 
-    std::string exchange;
-    std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap;
-    std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books;
+    std::vector<ExchangeMetricsView> views_;
     int port;
     std::function<SubscriberStats()> subStatsFn_;
     httplib::Server svr;

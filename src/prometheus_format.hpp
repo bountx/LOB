@@ -97,14 +97,16 @@ inline std::string buildPrometheusOutput(
     std::string_view exchange,
     const std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMap,
     const std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
-    const SubscriberStats* subStats = nullptr) {
+    const SubscriberStats* subStats = nullptr, bool emitHeaders = true) {
     std::ostringstream ss;
 
     auto writeCounterHeader = [&](const char* name, const char* help) {
+        if (!emitHeaders) return;
         ss << "# HELP " << name << " " << help << "\n";
         ss << "# TYPE " << name << " counter\n";
     };
     auto writeGaugeHeader = [&](const char* name, const char* help) {
+        if (!emitHeaders) return;
         ss << "# HELP " << name << " " << help << "\n";
         ss << "# TYPE " << name << " gauge\n";
     };
@@ -124,9 +126,11 @@ inline std::string buildPrometheusOutput(
     }
 
     // Processing time histogram — _bucket, _sum, _count per symbol.
-    ss << "# HELP lob_processing_time_microseconds"
-          " Time to process one order book update in microseconds\n";
-    ss << "# TYPE lob_processing_time_microseconds histogram\n";
+    if (emitHeaders) {
+        ss << "# HELP lob_processing_time_microseconds"
+              " Time to process one order book update in microseconds\n";
+        ss << "# TYPE lob_processing_time_microseconds histogram\n";
+    }
     for (const auto& [sym, m] : metricsMap) {
         const std::string exch = escapeLabelValue(exchange);
         const std::string symEsc = escapeLabelValue(sym);
@@ -191,11 +195,13 @@ inline std::string buildPrometheusOutput(
         }
     }
 
-    // Process-level memory — omitted entirely when /proc/self/status is unavailable.
-    if (const auto rss = readRssBytes()) {
-        ss << "# HELP lob_process_rss_bytes Resident set size of the process in bytes\n";
-        ss << "# TYPE lob_process_rss_bytes gauge\n";
-        ss << "lob_process_rss_bytes " << *rss << "\n";
+    // Process-level memory — emitted only on the first view to avoid duplication.
+    if (emitHeaders) {
+        if (const auto rss = readRssBytes()) {
+            ss << "# HELP lob_process_rss_bytes Resident set size of the process in bytes\n";
+            ss << "# TYPE lob_process_rss_bytes gauge\n";
+            ss << "lob_process_rss_bytes " << *rss << "\n";
+        }
     }
 
     // Subscriber server stats (injected by MetricsServer when available).

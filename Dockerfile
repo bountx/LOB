@@ -22,7 +22,7 @@ COPY vcpkg.json CMakeLists.txt ./
 
 # CMake checks that source files exist at configure time, so create stubs.
 # The cmake configure + vcpkg install result is cached in this layer.
-RUN mkdir -p src && touch src/main.cpp src/order_book.cpp src/feed_handler.cpp
+RUN mkdir -p src && touch src/main.cpp src/order_book.cpp src/binance_adapter.cpp src/kraken_adapter.cpp
 
 RUN cmake -B build -S . \
     -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake \

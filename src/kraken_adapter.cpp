@@ -32,7 +32,9 @@ void KrakenAdapter::handleBookSnapshot(const nlohmann::json& data) {
     }
 
     auto booksIt = books_->find(*canonical);
-    if (booksIt == books_->end()) { return; }
+    if (booksIt == books_->end()) {
+        return;
+    }
 
     // Build a Binance-compatible snapshot so we can reuse OrderBook::applySnapshot.
     nlohmann::json snap;
@@ -61,15 +63,21 @@ void KrakenAdapter::handleBookSnapshot(const nlohmann::json& data) {
 void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
     const std::string krakenSym = data["symbol"].get<std::string>();
     auto canonical = normalizer_.toCanonical("kraken", krakenSym);
-    if (!canonical) { return; }
+    if (!canonical) {
+        return;
+    }
 
     auto booksIt = books_->find(*canonical);
     auto metricsIt = metricsMap_->find(*canonical);
-    if (booksIt == books_->end() || metricsIt == metricsMap_->end()) { return; }
+    if (booksIt == books_->end() || metricsIt == metricsMap_->end()) {
+        return;
+    }
 
     OrderBook& book = *booksIt->second;
     Metrics& metrics = *metricsIt->second;
-    if (!book.isSnapshotApplied()) { return; }
+    if (!book.isSnapshotApplied()) {
+        return;
+    }
 
     const auto start = std::chrono::high_resolution_clock::now();
 
@@ -126,15 +134,41 @@ void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         fprintf(stderr, "[kraken] ws error: %s\n", msg->errorInfo.reason.c_str());
         return;
     }
-    if (msg->type != ix::WebSocketMessageType::Message) { return; }
+    if (msg->type != ix::WebSocketMessageType::Message) {
+        return;
+    }
 
     try {
         auto j = nlohmann::json::parse(msg->str);
-        if (!j.contains("channel") || !j["channel"].is_string()) { return; }
-        if (j["channel"] != "book") { return; }
-        if (!j.contains("type") || !j["type"].is_string()) { return; }
+
+        // Handle subscribe acknowledgements before the channel/type/data checks.
+        if (j.contains("method") && j["method"] == "subscribe") {
+            const bool success = !j.contains("success") || j["success"].get<bool>();
+            if (!success) {
+                const std::string errMsg =
+                    j.contains("error") ? j["error"].get<std::string>() : "unknown error";
+                fprintf(stderr, "[kraken] subscribe failed: %s\n", errMsg.c_str());
+                std::lock_guard<std::mutex> lock(snapshotMutex_);
+                subscribeError_ = true;
+                pendingSnapshots_.clear();
+                snapshotCv_.notify_all();
+            }
+            return;
+        }
+
+        if (!j.contains("channel") || !j["channel"].is_string()) {
+            return;
+        }
+        if (j["channel"] != "book") {
+            return;
+        }
+        if (!j.contains("type") || !j["type"].is_string()) {
+            return;
+        }
         const std::string type = j["type"].get<std::string>();
-        if (!j.contains("data") || !j["data"].is_array()) { return; }
+        if (!j.contains("data") || !j["data"].is_array()) {
+            return;
+        }
 
         for (const auto& item : j["data"]) {
             if (type == "snapshot") {
@@ -162,11 +196,10 @@ void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
  * @param maxSnapshotRetries Unused for Kraken (snapshot arrives via WebSocket).
  * @return true if all snapshots received; false on connection or timeout failure.
  */
-bool KrakenAdapter::start(
-    const std::vector<std::string>& symbols,
-    std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,
-    std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
-    int snapshotDepthArg, int /*maxSnapshotRetries*/) {
+bool KrakenAdapter::start(const std::vector<std::string>& symbols,
+                          std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,
+                          std::unordered_map<std::string, std::unique_ptr<Metrics>>& metricsMapRef,
+                          int snapshotDepthArg, int /*maxSnapshotRetries*/) {
     // Validate all canonical symbols and build Kraken-specific symbol list.
     std::vector<std::string> krakenSymbols;
     krakenSymbols.reserve(symbols.size());
@@ -200,6 +233,7 @@ bool KrakenAdapter::start(
     }
     {
         std::lock_guard<std::mutex> lock(snapshotMutex_);
+        subscribeError_ = false;
         pendingSnapshots_.clear();
         for (const auto& canonical : symbols) {
             pendingSnapshots_.insert(canonical);
@@ -233,13 +267,17 @@ bool KrakenAdapter::start(
     webSocket_.send(subMsg.dump());
     printf("[kraken] subscribed to %zu symbol(s) at depth %d\n", symbols.size(), snapshotDepth_);
 
-    // Wait until all per-symbol snapshots have been applied.
+    // Wait until all per-symbol snapshots have been applied (or a subscribe error is signalled).
     {
         std::unique_lock<std::mutex> lock(snapshotMutex_);
         const bool ok = snapshotCv_.wait_for(lock, std::chrono::seconds(30),
-                                              [this] { return pendingSnapshots_.empty(); });
+                                             [this] { return pendingSnapshots_.empty(); });
         if (!ok) {
             fprintf(stderr, "[kraken] timed out waiting for book snapshots\n");
+            webSocket_.stop();
+            return false;
+        }
+        if (subscribeError_) {
             webSocket_.stop();
             return false;
         }

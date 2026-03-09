@@ -31,7 +31,7 @@ public:
                * @param port TCP port to listen on (default 8765).
                */
 
-    explicit SubscriberServer(std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books,
+    explicit SubscriberServer(const std::unordered_map<std::string, OrderBook*>& books,
                               int port = 8765)
         : books_(books), port_(port), server_(port, "0.0.0.0") {}
 
@@ -192,8 +192,8 @@ public:
             for (const auto& id : backpressureIds) {
                 clients_.erase(id);
             }
-            backpressureDisconnects_.fetch_add(
-                static_cast<long long>(backpressureIds.size()), std::memory_order_relaxed);
+            backpressureDisconnects_.fetch_add(static_cast<long long>(backpressureIds.size()),
+                                               std::memory_order_relaxed);
         }
     }
 
@@ -260,7 +260,7 @@ private:
                 clients_[id].streams.insert(key);
             }
 
-            auto it = books_.find(symbol);
+            auto it = books_.find(exchange + "." + symbol);
             if (it != books_.end()) {
                 auto snap = it->second->getSnapshot();
                 if (snap.applied) {
@@ -296,7 +296,7 @@ private:
         }
     }
 
-    std::unordered_map<std::string, std::unique_ptr<OrderBook>>& books_;
+    const std::unordered_map<std::string, OrderBook*>& books_;
     int port_;
     mutable std::mutex mu_;
     std::unordered_map<std::string, ClientState> clients_;
