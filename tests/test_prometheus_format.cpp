@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -159,4 +160,82 @@ TEST_F(PrometheusFormatTest, AllSymbolsAppearInOutput) {
     const auto output = build();
     EXPECT_NE(output.find("symbol=\"BTCUSDT\""), std::string::npos);
     EXPECT_NE(output.find("symbol=\"ETHUSDT\""), std::string::npos);
+}
+
+// ─── Feed data age (staleness sentinel) ───────────────────────────────────────
+
+// lastUpdateTimeMs == 0 is the "no data yet / reconnecting" sentinel.
+// The metric must not appear at all in that state — Prometheus would otherwise
+// show a spurious 0-age reading during startup or after a reconnect.
+TEST_F(PrometheusFormatTest, DataAgeAbsentWhenSentinelIsZero) {
+    // Default-constructed Metrics has lastUpdateTimeMs == 0.
+    const auto output = build();
+    EXPECT_EQ(output.find("lob_feed_data_age_seconds"), std::string::npos);
+}
+
+// Once a symbol receives its first update the sentinel moves off 0 and the
+// metric must be present with a non-negative value.
+TEST_F(PrometheusFormatTest, DataAgeEmittedAfterFirstUpdate) {
+    const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+    metrics["BTCUSDT"]->lastUpdateTimeMs.store(nowMs - 500);  // 0.5 s ago
+
+    const auto output = build();
+    EXPECT_NE(output.find("lob_feed_data_age_seconds"), std::string::npos);
+    EXPECT_NE(output.find("symbol=\"BTCUSDT\""), std::string::npos);
+}
+
+// The emitted value must reflect the actual elapsed time (within a generous
+// 2-second window to keep the test stable under slow CI).
+TEST_F(PrometheusFormatTest, DataAgeValueApproximatelyCorrect) {
+    const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+    // Pretend the last update was exactly 3 seconds ago.
+    metrics["BTCUSDT"]->lastUpdateTimeMs.store(nowMs - 3000);
+
+    const auto output = build();
+
+    // Extract the numeric value from the data line.
+    const std::string key = "lob_feed_data_age_seconds{exchange=\"testex\",symbol=\"BTCUSDT\"} ";
+    const auto pos = output.find(key);
+    ASSERT_NE(pos, std::string::npos) << "metric line not found";
+    const double age = std::stod(output.substr(pos + key.size()));
+    // 3 s target, allow ±2 s for scheduling jitter.
+    EXPECT_GE(age, 1.0);
+    EXPECT_LE(age, 5.0);
+}
+
+// In a multi-symbol setup symbols still at sentinel 0 (awaiting snapshot after
+// reconnect) must be suppressed while symbols with real data are still emitted.
+TEST_F(PrometheusFormatTest, DataAgeSkipsZeroSentinelSymbolsInMultiSymbol) {
+    metrics["ETHUSDT"] = std::make_unique<Metrics>();
+    books["ETHUSDT"] = std::make_unique<OrderBook>();
+    // BTCUSDT stays at sentinel 0 (no snapshot yet).
+    // ETHUSDT has received updates.
+    const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+    metrics["ETHUSDT"]->lastUpdateTimeMs.store(nowMs - 1000);
+
+    const auto output = build();
+    // ETHUSDT age must be present.
+    EXPECT_NE(output.find("lob_feed_data_age_seconds{exchange=\"testex\",symbol=\"ETHUSDT\"}"),
+              std::string::npos);
+    // BTCUSDT must NOT appear in feed-age lines.
+    EXPECT_EQ(output.find("lob_feed_data_age_seconds{exchange=\"testex\",symbol=\"BTCUSDT\"}"),
+              std::string::npos);
+}
+
+// HELP/TYPE headers must appear once when at least one symbol has data.
+TEST_F(PrometheusFormatTest, DataAgeHeadersPresentWhenDataExists) {
+    const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+    metrics["BTCUSDT"]->lastUpdateTimeMs.store(nowMs - 100);
+
+    const auto output = build();
+    EXPECT_NE(output.find("# HELP lob_feed_data_age_seconds"), std::string::npos);
+    EXPECT_NE(output.find("# TYPE lob_feed_data_age_seconds gauge"), std::string::npos);
 }

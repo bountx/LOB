@@ -64,8 +64,14 @@ private:
     bool wsConnected = false;
 
     std::jthread resyncThread;
+    std::jthread watchdogThread_;
+
+    // Steady-clock ms of the last received WebSocket message (Open or data frame).
+    // 0 = not yet connected. Used by the watchdog for connection-level stall detection.
+    std::atomic<long long> lastConnectionActivityMs_{0};
 
     int snapshotDepth = 1000;
+    std::vector<std::string> subscribedSymbols_;  // canonical symbols; for reconnect + watchdog
 
     // Fetches a depth snapshot from the Binance REST API and applies it to the order book.
     // binanceSym is the exchange-specific symbol used in the REST URL (e.g. "BTCUSDT").
@@ -79,4 +85,7 @@ private:
     // Pulls symbols off the resync queue and re-fetches their snapshots, one at a time.
     // Runs on its own thread until stoken fires.
     void runResyncWorker(int maxSnapshotRetries, std::stop_token stoken);
+
+    // Detects a silently stalled feed and forces a reconnect via webSocket.stop().
+    void runWatchdog(std::stop_token stoken);
 };

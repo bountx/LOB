@@ -12,7 +12,10 @@ KrakenAdapter::~KrakenAdapter() { stop(); }
 /**
  * @brief Stops the WebSocket connection.
  */
-void KrakenAdapter::stop() { webSocket_.stop(); }
+void KrakenAdapter::stop() {
+    watchdogThread_ = {};  // request_stop() + join before closing the socket
+    webSocket_.stop();
+}
 
 /**
  * @brief Apply a Kraken book snapshot message for one symbol.
@@ -42,6 +45,14 @@ void KrakenAdapter::handleBookSnapshot(const nlohmann::json& data) {
     snap["bids"] = kraken::levelsToStringPairs(data["bids"]);
     snap["asks"] = kraken::levelsToStringPairs(data["asks"]);
     booksIt->second->applySnapshot(snap);
+
+    auto metricsIt = metricsMap_->find(*canonical);
+    if (metricsIt != metricsMap_->end()) {
+        const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+        metricsIt->second->lastUpdateTimeMs.store(nowMs, std::memory_order_relaxed);
+    }
 
     {
         std::lock_guard<std::mutex> lock(snapshotMutex_);
@@ -102,6 +113,10 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
         std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     metrics.recordProcessingUs(processingUs);
     metrics.msgCount.fetch_add(1);
+    metrics.lastUpdateTimeMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now().time_since_epoch())
+                                       .count(),
+                                   std::memory_order_relaxed);
 
     if (updateCallback_) {
         updateCallback_(exchangeName(), *canonical, bids, asks, eventMs);
@@ -117,6 +132,15 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
  * @param msg Pointer to the WebSocket message.
  */
 void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
+    // Refresh the connection-level activity timestamp on any live traffic so the
+    // watchdog can distinguish a dead socket from a legitimately quiet symbol.
+    if (msg->type == ix::WebSocketMessageType::Open ||
+        msg->type == ix::WebSocketMessageType::Message) {
+        lastConnectionActivityMs_.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now().time_since_epoch())
+                                            .count(),
+                                        std::memory_order_relaxed);
+    }
     if (msg->type == ix::WebSocketMessageType::Open) {
         bool isReconnect = false;
         {
@@ -137,6 +161,11 @@ void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             auto it = books_->find(sym);
             if (it != books_->end()) {
                 it->second->clear();
+            }
+            // Reset to 0 so the watchdog skips this symbol while we wait for a new snapshot.
+            auto mit = metricsMap_->find(sym);
+            if (mit != metricsMap_->end()) {
+                mit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
             }
         }
         {
@@ -272,6 +301,12 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
     krakenSymbols_ = krakenSymbols;
     subscribedSymbols_ = symbols;
 
+    // Reset data-age sentinels so the watchdog doesn't fire before first snapshot.
+    for (const auto& canonical : symbols) {
+        metricsMapRef.at(canonical)->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+    }
+    lastConnectionActivityMs_.store(0, std::memory_order_relaxed);
+
     webSocket_.setUrl("wss://ws.kraken.com/v2");
     webSocket_.setPingInterval(30);
     webSocket_.setOnMessageCallback(
@@ -314,5 +349,47 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
             return false;
         }
     }
+
+    // Spawn watchdog only after we are fully connected and have initial snapshots.
+    // This prevents the watchdog from running during the startup window and avoids
+    // leaked threads on connection/snapshot failures.
+    watchdogThread_ = std::jthread([this](std::stop_token st) { runWatchdog(st); });
     return true;
+}
+
+/**
+ * @brief Watchdog thread: detects a silently stalled Kraken feed and forces a reconnect.
+ *
+ * Checks every 500 ms whether any WebSocket message has arrived in the last 2 s.
+ * Uses a connection-level timestamp (lastConnectionActivityMs_) updated on every Open
+ * or data frame, so legitimately quiet symbols do not trigger false reconnects.
+ * A stalled resubscribe (Open fires but no book data arrives) is also caught because
+ * the Open handler refreshes the timestamp; if no subsequent messages arrive within
+ * 2 s the watchdog fires again.
+ * lastConnectionActivityMs_ == 0 means no connection has been established yet; the
+ * watchdog stays silent until traffic has been seen at least once.
+ */
+void KrakenAdapter::runWatchdog(std::stop_token stoken) {
+    constexpr long long kStaleThresholdMs = 2000;
+
+    while (!stoken.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (stoken.stop_requested()) break;
+
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count();
+
+        const long long last = lastConnectionActivityMs_.load(std::memory_order_relaxed);
+        if (last == 0) continue;  // not yet connected — skip
+        if ((now - last) > kStaleThresholdMs) {
+            fprintf(stderr, "[kraken] stale connection: no data for %lld ms, forcing reconnect\n",
+                    now - last);
+            // Zero the sentinel before restarting so the next watchdog tick skips
+            // until the Open handler refreshes lastConnectionActivityMs_.
+            lastConnectionActivityMs_.store(0, std::memory_order_relaxed);
+            webSocket_.stop();
+            webSocket_.start();
+        }
+    }
 }

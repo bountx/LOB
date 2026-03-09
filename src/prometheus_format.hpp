@@ -1,4 +1,6 @@
 #pragma once
+#include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -123,6 +125,26 @@ inline std::string buildPrometheusOutput(
     writeGaugeHeader("lob_event_lag_milliseconds", "Last event lag in milliseconds");
     for (const auto& [sym, m] : metricsMap) {
         writeLine("lob_event_lag_milliseconds", sym, static_cast<double>(m->lastEventLagMs.load()));
+    }
+
+    {
+        const long long scrapeNowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count();
+        std::vector<std::pair<std::string, double>> ageLines;
+        for (const auto& [sym, m] : metricsMap) {
+            const long long last = m->lastUpdateTimeMs.load();
+            if (last == 0) continue;  // no data yet / reconnecting
+            const double age = std::max(0.0, (scrapeNowMs - last) / 1000.0);
+            ageLines.emplace_back(sym, age);
+        }
+        if (!ageLines.empty()) {
+            writeGaugeHeader("lob_feed_data_age_seconds",
+                             "Seconds since last order book update; absent until first update");
+            for (const auto& [sym, age] : ageLines) {
+                writeLine("lob_feed_data_age_seconds", sym, age);
+            }
+        }
     }
 
     // Processing time histogram — _bucket, _sum, _count per symbol.
