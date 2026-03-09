@@ -3,7 +3,7 @@
 [![Tests](https://github.com/bountx/LOB/actions/workflows/test.yml/badge.svg)](https://github.com/bountx/LOB/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/bountx/LOB/badge.svg?branch=main&kill_cache=1)](https://coveralls.io/github/bountx/LOB?branch=main&kill_cachee=2)
 
-Connects to Binance and Kraken, maintains live order books, and re-broadcasts normalized updates over WebSocket to any number of subscribers.
+Connects to Binance and Kraken, maintains live order books, and fans out normalized updates to subscribers over WebSocket.
 
 ## Quickstart
 
@@ -32,13 +32,13 @@ asyncio.run(main())
 
 Stream format: `{exchange}.{CANONICAL-SYMBOL}.book`
 
-On subscribe — full snapshot:
+On subscribe, you get a full snapshot:
 ```json
 {"type":"snapshot","exchange":"binance","symbol":"BTC-USDT","ts":1712000000000,
  "bids":[["94500.00000000","1.23000000"]],"asks":[["94501.00000000","0.54000000"]]}
 ```
 
-Then incremental updates. `"0"` quantity means the level was removed:
+Then incremental updates. Quantity `"0"` means the level was removed:
 ```json
 {"type":"update","exchange":"binance","symbol":"BTC-USDT","ts":1712000000123,
  "bids":[["94500.00000000","0"]],"asks":[["94502.00000000","1.80000000"]]}
@@ -85,26 +85,26 @@ Unsubscribe:
 
 - **WebSocket:** `wss://stream.binance.com:9443/stream?streams=btcusdt@depth@100ms`
 - **Snapshot:** REST `GET /api/v3/depth?symbol=BTCUSDT&limit=1000` (50 weight; limit 6000/min)
-- **Book model:** Unmanaged — event-sourced diffs applied on top of a REST snapshot. Book starts at `snapshot_depth` levels and **grows over time** (3k–10k+ per side) as the market explores new price ranges.
+- **Book model:** Unmanaged. The adapter fetches a REST snapshot then applies a continuous diff stream. The book starts at `snapshot_depth` levels and grows over time (typically 3k-10k+ per side) as the price range widens.
 - **Sequence checking:** Yes (`U`/`u` fields). On gap: clears book, re-fetches REST snapshot, replays buffered messages.
-- **Rate limits:** 429 → waits `Retry-After`; 418 (IP ban) → longer wait. Handled automatically.
-- **Symbol format:** `BTCUSDT` ↔ `BTC-USDT` (auto strip/insert `-`). Supported quote suffixes: `USDT BUSD USDC USD BTC ETH BNB EUR`.
+- **Rate limits:** 429 waits `Retry-After`; 418 (IP ban) triggers a longer wait. Both handled automatically.
+- **Symbol format:** `BTCUSDT` <-> `BTC-USDT` (strips/inserts `-`). Supported quote suffixes: `USDT BUSD USDC USD BTC ETH BNB EUR`.
 
 ### Kraken
 
 - **WebSocket:** `wss://ws.kraken.com/v2`
 - **Snapshot:** Delivered via WebSocket after subscribe (no REST call).
-- **Book model:** Managed — Kraken maintains exactly `depth` levels server-side. When a level is consumed or cancelled, Kraken automatically sends a replacement from deeper in the book (**backfill**). Book depth is always stable at the subscribed value.
-- **Sequence checking:** None — Kraken guarantees ordering.
+- **Book model:** Managed. Kraken maintains exactly `depth` levels server-side. When a level is consumed or cancelled, Kraken sends a replacement from deeper in the book (a backfill). Depth stays flat at the subscribed value.
+- **Sequence checking:** None — Kraken guarantees ordering on the connection.
 - **Supported depths:** 10, 25, 100, 500, 1000 (requested depth is clamped down to nearest).
-- **Backfill events:** When a top-of-book level is consumed, the same update message contains both the removal and a new level at the outer window boundary. This new level is a real resting order from the full book, not a new arrival — it was already there, just outside the visible window.
-- **Symbol format:** `BTC/USDT` ↔ `BTC-USDT` (swap `/`↔`-`). Kraken's legacy `XBT` ticker maps to canonical `BTC`.
+- **Backfill events:** When a top-of-book level is consumed, the same update message contains the removal and a new level at the outer window boundary. That new level is a real resting order that was already in the full book, just previously outside the visible window.
+- **Symbol format:** `BTC/USDT` <-> `BTC-USDT` (swaps `/`/`-`). Kraken's `XBT` ticker maps to canonical `BTC`.
 
-### Binance vs Kraken — key differences
+### Binance vs Kraken
 
 | | Binance | Kraken |
 |---|---|---|
-| Book size over time | Grows (3k–10k+ levels) | Fixed at subscribed depth |
+| Book size over time | Grows (3k-10k+ levels) | Fixed at subscribed depth |
 | All updates are new order arrivals? | Yes | No — outer-boundary additions are backfills |
 | Resync needed? | Yes, on sequence gap | No |
 
@@ -115,7 +115,7 @@ Available at `http://your-host:9090/metrics`. All labeled by `exchange` and `sym
 | Metric | Type | Description |
 |---|---|---|
 | `lob_messages_total` | counter | WebSocket messages processed |
-| `lob_event_lag_milliseconds` | gauge | Exchange timestamp → local receipt |
+| `lob_event_lag_milliseconds` | gauge | Exchange timestamp to local receipt |
 | `lob_processing_time_microseconds` | gauge | Last update processing time |
 | `lob_max_processing_time_microseconds` | gauge | Peak processing time |
 | `lob_orderbook_bids_count` | gauge | Bid levels in book |
@@ -124,7 +124,7 @@ Available at `http://your-host:9090/metrics`. All labeled by `exchange` and `sym
 | `lob_orderbook_best_ask_price` | gauge | Best ask |
 | `lob_orderbook_spread_price` | gauge | Spread (emitted only when book is populated) |
 
-`GET /health` → `200 OK`
+`GET /health` returns `200 OK`.
 
 Grafana dashboard auto-provisioned at `http://your-host:3000` (admin/admin).
 
