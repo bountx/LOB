@@ -297,7 +297,7 @@ int main(int argc, char* argv[]) {
                 if (hasGenuineOfi) {
                     auto it = metricsMapPtr->find(std::string(symbol));
                     if (it != metricsMapPtr->end()) {
-                        it->second->lastOfiValue.store(ofi, std::memory_order_relaxed);
+                        it->second->ofiAccumulator.fetch_add(ofi, std::memory_order_relaxed);
                     }
                 }
             });
