@@ -221,12 +221,14 @@ inline std::string buildPrometheusOutput(
         // OFI: divide by 1e8 to express in native quantity units (e.g. BTC).
         constexpr double kOfiScale = 100'000'000.0;
         writeGaugeHeader("lob_ofi_value",
-                         "Order Flow Imbalance accumulated since last scrape: sum of bid quantity "
-                         "changes minus ask quantity changes across the top OFI view levels "
-                         "(Genuine events only). Reset to 0 on each scrape.");
+                         "Cumulative Order Flow Imbalance since process start: sum of bid quantity "
+                         "changes minus ask quantity changes across the top OFI view levels, "
+                         "populated from every non-Backfill delta (including Maintenance). "
+                         "Use deriv() or delta() in Grafana to obtain the per-interval rate.");
         for (const auto& [sym, m] : metricsMap) {
-            const long long accumulated = m->ofiAccumulator.exchange(0, std::memory_order_relaxed);
-            writeLine("lob_ofi_value", sym, static_cast<double>(accumulated) / kOfiScale);
+            writeLine("lob_ofi_value", sym,
+                      static_cast<double>(m->ofiAccumulator.load(std::memory_order_relaxed)) /
+                          kOfiScale);
         }
     }
 

@@ -18,6 +18,7 @@
 #include "metrics.hpp"
 #include "metrics_server.hpp"
 #include "ofi_types.hpp"
+#include "utils/checked_arith.hpp"
 #include "order_book.hpp"
 #include "subscriber_server.hpp"
 
@@ -297,7 +298,13 @@ int main(int argc, char* argv[]) {
                 if (hasGenuineOfi) {
                     auto it = metricsMapPtr->find(std::string(symbol));
                     if (it != metricsMapPtr->end()) {
-                        it->second->ofiAccumulator.fetch_add(ofi, std::memory_order_relaxed);
+                        auto& acc = it->second->ofiAccumulator;
+                        long long cur = acc.load(std::memory_order_relaxed);
+                        long long next;
+                        do {
+                            next = checkedAdd(cur, ofi);
+                        } while (!acc.compare_exchange_weak(cur, next,
+                                                            std::memory_order_relaxed));
                     }
                 }
             });
