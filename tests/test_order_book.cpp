@@ -257,6 +257,31 @@ TEST(OrderBook, EventKindBackfillPreservedInDelta) {
     EXPECT_EQ(result.deltas[0].kind, EventKind::Backfill);
 }
 
+TEST(OrderBook, BackfillOfiViewCrossingProducesBackfillKindOnAllDeltas) {
+    // ofiDepth=2 with 3 ask levels so position 3 (50003) sits outside the view.
+    // A Backfill removal of the best ask triggers a view rebuild (replacement enters).
+    // Both the direct removal delta and the secondary replacement delta must carry
+    // kind == EventKind::Backfill, not EventKind::Maintenance.
+    OrderBook book(2);
+    book.applySnapshot(
+        makeSnapshot(100, {{"50001.00", "1.0"}, {"50002.00", "1.0"}, {"50003.00", "1.0"}}, {}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {{"50001.00", "0.0"}}, {}), EventKind::Backfill);
+    EXPECT_TRUE(result.success);
+
+    // Direct removal delta + replacement maintenance delta.
+    ASSERT_EQ(result.deltas.size(), 2u);
+    for (const auto& d : result.deltas) {
+        EXPECT_EQ(d.kind, EventKind::Backfill);
+    }
+
+    // Verify the delta semantics are still correct.
+    EXPECT_EQ(result.deltas[0].newQty, 0LL);    // removal: level gone from state
+    EXPECT_LT(result.deltas[0].deltaQty, 0LL);  // removal: negative state delta
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);  // replacement: positive view-contribution delta
+}
+
 TEST(OrderBook, ApplyDeltaReturnsDeltasWithGenuineKind) {
     OrderBook book;
     book.applySnapshot(makeSnapshot(0, {{"50001.00", "1.0"}}, {{"49999.00", "1.0"}}));

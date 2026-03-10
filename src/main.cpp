@@ -266,18 +266,25 @@ int main(int argc, char* argv[]) {
                 subServer.broadcastUpdate(exch, symbol, deltas, ts);
 
                 // Compute OFI for this update: sum bid deltas minus ask deltas
-                // for Genuine events that fall within the OFI view.
+                // for Genuine/Maintenance events that fall within the OFI view.
+                // Only persist the result when the batch contains at least one
+                // OFI-bearing delta — updates that only touch out-of-window levels
+                // produce ofi=0 which must not overwrite the last meaningful reading.
                 long long ofi = 0;
+                bool hasGenuineOfi = false;
                 for (const auto& d : deltas) {
                     // Include both exchange-originated (Genuine) and secondary view-change
                     // (Maintenance) deltas. Exclude Backfill (replay) deltas.
                     if (d.kind != EventKind::Backfill && (d.wasInView || d.inOfiView)) {
                         ofi += d.isBid ? d.deltaQty : -d.deltaQty;
+                        hasGenuineOfi = true;
                     }
                 }
-                auto it = metricsMapPtr->find(std::string(symbol));
-                if (it != metricsMapPtr->end()) {
-                    it->second->lastOfiValue.store(ofi, std::memory_order_relaxed);
+                if (hasGenuineOfi) {
+                    auto it = metricsMapPtr->find(std::string(symbol));
+                    if (it != metricsMapPtr->end()) {
+                        it->second->lastOfiValue.store(ofi, std::memory_order_relaxed);
+                    }
                 }
             });
     }

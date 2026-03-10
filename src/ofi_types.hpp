@@ -15,7 +15,8 @@ enum class EventKind : uint8_t {
 // wasInView – true if the price was in the OFI view before this update
 // inOfiView – true if the price is in the OFI view after this update
 // kind      – Genuine for live stream; Backfill for snapshot replay;
-//             Maintenance for secondary OFI-view evictions/replacements
+//             Maintenance for secondary OFI-view evictions/replacements caused by a Genuine update
+//             (secondary deltas caused by a Backfill update carry kind == Backfill)
 //
 // OFI consumers should filter on kind != Backfill and (wasInView || inOfiView).
 // Maintenance deltas must be included to account for evicted and replacement levels.

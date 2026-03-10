@@ -144,10 +144,14 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
     // Emit the direct delta for the updated price.
     out.push_back(LevelDelta{price, newQty, delta, isBid, wasInView, nowInView, kind});
 
-    // Emit Maintenance deltas for any other levels whose view membership changed.
-    // deltaQty for Maintenance is the OFI view-contribution change (not a state change):
+    // Emit secondary deltas for any other levels whose view membership changed.
+    // deltaQty is the OFI view-contribution change (not a state change):
     //   eviction:    deltaQty = -lvlQty  (view qty dropped from lvlQty to 0)
     //   replacement: deltaQty = +lvlQty  (view qty grew from 0 to lvlQty)
+    // The kind is propagated from the triggering update: Backfill-phase updates
+    // produce Backfill-tagged secondaries; Genuine-phase updates produce Maintenance.
+    const EventKind secondaryKind =
+        (kind == EventKind::Backfill) ? EventKind::Backfill : EventKind::Maintenance;
 
     // Evictions: present in viewBefore but absent in viewAfter (excluding updated price).
     for (const auto& [lvlPrice, lvlQty] : viewBefore) {
@@ -156,8 +160,7 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
             std::any_of(viewAfter.begin(), viewAfter.end(),
                         [lvlPrice](const Level& l) { return l.first == lvlPrice; });
         if (!stillIn) {
-            out.push_back(
-                LevelDelta{lvlPrice, lvlQty, -lvlQty, isBid, true, false, EventKind::Maintenance});
+            out.push_back(LevelDelta{lvlPrice, lvlQty, -lvlQty, isBid, true, false, secondaryKind});
         }
     }
 
@@ -167,8 +170,7 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
         const bool wasIn = std::any_of(viewBefore.begin(), viewBefore.end(),
                                        [lvlPrice](const Level& l) { return l.first == lvlPrice; });
         if (!wasIn) {
-            out.push_back(
-                LevelDelta{lvlPrice, lvlQty, lvlQty, isBid, false, true, EventKind::Maintenance});
+            out.push_back(LevelDelta{lvlPrice, lvlQty, lvlQty, isBid, false, true, secondaryKind});
         }
     }
 }
