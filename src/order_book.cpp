@@ -12,8 +12,28 @@ namespace {
 constexpr double kPriceScale = 100'000'000.0;
 }
 
+/**
+ * @brief Construct an OrderBook with a specified Out-of-Index (OFI) view depth.
+ *
+ * @param ofiDepthArg Maximum number of price levels to keep in each OFI side (bids and asks).
+ */
 OrderBook::OrderBook(std::size_t ofiDepthArg) : ofiDepth(ofiDepthArg) {}
 
+/**
+ * @brief Replace the entire live order book state from a snapshot JSON.
+ *
+ * Parses the provided snapshot into temporary state and, on successful parsing,
+ * atomically swaps it into the live book: updates lastUpdateId, replaces bid
+ * and ask maps, rebuilds OFI views for both sides, and marks the snapshot as
+ * applied. Parsing failures leave the existing live state unchanged.
+ *
+ * @param snapshot JSON object expected to contain:
+ *  - "lastUpdateId": numeric update identifier,
+ *  - "asks": array of [priceString, quantityString] pairs,
+ *  - "bids": array of [priceString, quantityString] pairs.
+ *  Price and quantity strings are parsed via parseDecimal; levels with
+ *  quantity equal to zero are omitted.
+ */
 void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
     // Parse into temporaries first so a throw leaves the live book unchanged.
     const long long newLastUpdateId = snapshot["lastUpdateId"].get<long long>();
@@ -46,6 +66,22 @@ void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
     printf("snapshot applied\n");
 }
 
+/**
+ * @brief Apply an incremental order-book update and produce resulting deltas.
+ *
+ * Parses the provided JSON update, validates sequence continuity against the
+ * current lastUpdateId, applies each level change to internal state, updates
+ * lastUpdateId when successful, and returns an UpdateResult containing a
+ * success flag and any emitted LevelDelta entries.
+ *
+ * Parsing of the JSON and level values occurs before any mutation of live
+ * state; if parsing throws, the live order book is not modified.
+ *
+ * @param update JSON object containing update fields `U`, `u`, `a` (asks) and `b` (bids).
+ * @param kind Type of event driving this update (e.g., Maintenance or Backfill).
+ * @return UpdateResult `success` is `true` when the update was applied (or already applied),
+ *         `false` when a gap was detected. `deltas` contains emitted level and OFI membership changes.
+ */
 UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind) {
     // Parse sequence IDs and all level data before acquiring the lock so that
     // a JSON/parse exception cannot leave the live book half-mutated.
@@ -83,6 +119,18 @@ UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind
     return result;
 }
 
+/**
+ * @brief Apply a batch of bid and ask level updates and produce the resulting level deltas.
+ *
+ * Parses the provided JSON level arrays and applies each price-level change to the live order
+ * book, updating OFI views and emitting LevelDelta records for direct changes and any
+ * secondary changes caused by OFI membership updates.
+ *
+ * @param bidsArr JSON array of bid levels; each element must be an array ["price", "quantity"] with string values.
+ * @param asksArr JSON array of ask levels; each element must be an array ["price", "quantity"] with string values.
+ * @param kind EventKind indicating the source/type of the update (e.g., Maintenance or Backfill).
+ * @return std::vector<LevelDelta> Vector of LevelDelta entries produced by applying the provided updates.
+ */
 std::vector<LevelDelta> OrderBook::applyDelta(const nlohmann::json& bidsArr,
                                               const nlohmann::json& asksArr, EventKind kind) {
     // Parse all level data before acquiring the lock so that a JSON/parse exception
@@ -110,6 +158,22 @@ std::vector<LevelDelta> OrderBook::applyDelta(const nlohmann::json& bidsArr,
     return deltas;
 }
 
+/**
+ * @brief Apply a single price-level change to the internal state and update OFI views, emitting resulting deltas.
+ *
+ * Applies the new quantity for `price` on the bid side if `isBid` is true, otherwise on the ask side.
+ * Updates the OFI (top-of-book) view for that side and appends one or more LevelDelta entries to `out`
+ * describing the direct change to `price` and any secondary view-membership changes caused by the update.
+ *
+ * If the net quantity change for `price` is zero, the function performs no mutation and appends no deltas.
+ *
+ * @param price Integer-encoded price key (scaled).
+ * @param newQty New integer-encoded quantity for the price; zero means remove the level.
+ * @param isBid True to operate on bids, false to operate on asks.
+ * @param kind Event kind that triggered the change; propagated to emitted deltas (secondaries are
+ *             tagged as Backfill if the triggering kind is Backfill, otherwise as Maintenance).
+ * @param[out] out Vector to which generated LevelDelta entries (direct and secondary) are appended.
+ */
 void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, EventKind kind,
                                  std::vector<LevelDelta>& out) {
     auto& state = isBid ? bidState : askState;
@@ -175,6 +239,23 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
     }
 }
 
+/**
+ * @brief Update the OFI (top-of-book) view for a single price level on the specified side.
+ *
+ * Adjusts the OFI view for bids or asks to reflect the new quantity at `price`, enforcing
+ * the configured view depth and maintaining price ordering. If `newQty` is zero the level
+ * is removed from the view (and the view will be replenished if necessary). If `newQty`
+ * is positive the level is either inserted or updated; an insertion occurs only when the
+ * view has available space or the price is better than the current worst entry, and the
+ * view will be trimmed if it exceeds the configured depth.
+ *
+ * For bids the OFI view is kept in descending price order (best/biggest price at front).
+ * For asks the OFI view is kept in ascending price order (best/smallest price at front).
+ *
+ * @param price Price level expressed in internal integer (scaled) units.
+ * @param newQty Quantity at the price level in internal integer units; use `0` to remove the level.
+ * @param isBid `true` to update the bids OFI view, `false` to update the asks OFI view.
+ */
 void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {
     if (isBid) {
         // ofiBids sorted descending: front = best bid, back = worst bid in view.
@@ -225,6 +306,15 @@ void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {
     }
 }
 
+/**
+ * @brief Rebuilds the OFI (top-of-book) view for the specified side from the full order state.
+ *
+ * Recomputes the side's OFI list to contain up to `ofiDepth` price levels selected from the full
+ * side state: the highest prices for bids and the lowest prices for asks.
+ *
+ * @param isBid If `true`, rebuild the bid OFI view (best bids first); if `false`, rebuild the ask
+ *              OFI view (best asks first).
+ */
 void OrderBook::rebuildOfiSide(bool isBid) {
     if (isBid) {
         std::vector<Level> all(bidState.begin(), bidState.end());
@@ -241,6 +331,15 @@ void OrderBook::rebuildOfiSide(bool isBid) {
     }
 }
 
+/**
+ * @brief Reset the order book to an empty, not-applied state.
+ *
+ * Clears all bid/ask state and OFI views, sets last update id to 0,
+ * and marks that no snapshot has been applied.
+ *
+ * This operation is performed under the internal mutex to synchronize
+ * concurrent access to the live order book state.
+ */
 void OrderBook::clear() {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     lastUpdateId = 0;
@@ -251,13 +350,38 @@ void OrderBook::clear() {
     ofiAsks.clear();
 }
 
+/**
+ * @brief Retrieve the last applied update identifier.
+ *
+ * @return long long The current last update identifier stored in the order book.
+ */
 long long OrderBook::getLastUpdateId() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     return lastUpdateId;
 }
 
+/**
+ * @brief Indicates whether a snapshot has been applied to the order book.
+ *
+ * @return `true` if a snapshot has been applied, `false` otherwise.
+ */
 bool OrderBook::isSnapshotApplied() const { return snapshotApplied.load(); }
 
+/**
+ * @brief Produce a consistent summary of order-book counts and top-of-book prices.
+ *
+ * Returns a snapshot of aggregated statistics taken under the internal mutex so the
+ * values reflect a consistent view at the time of the call. The counts are the total
+ * number of price levels in the full bid and ask state; bestAsk and bestBid are taken
+ * from the OFI (top-of-book) views and converted to floating-point by dividing by
+ * kPriceScale.
+ *
+ * @return Stats Struct containing:
+ *   - asksCount: number of ask levels,
+ *   - bidsCount: number of bid levels,
+ *   - bestAsk: best ask price (0.0 if OFI ask view is empty),
+ *   - bestBid: best bid price (0.0 if OFI bid view is empty).
+ */
 OrderBook::Stats OrderBook::getStats() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     Stats s;
@@ -272,6 +396,19 @@ OrderBook::Stats OrderBook::getStats() const {
     return s;
 }
 
+/**
+ * @brief Retrieve a point-in-time snapshot of the current order book state.
+ *
+ * The returned Snapshot contains whether a full snapshot has been applied and, when
+ * applied, the complete sets of ask and bid levels. Ask levels are ordered
+ * ascending by price (best ask first), and bid levels are ordered descending by
+ * price (best bid first).
+ *
+ * @return Snapshot
+ *   - `applied`: `true` if a full snapshot has been applied, `false` otherwise.
+ *   - `asks`: vector of ask price/quantity pairs ordered ascending by price.
+ *   - `bids`: vector of bid price/quantity pairs ordered descending by price.
+ */
 OrderBook::Snapshot OrderBook::getSnapshot() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     Snapshot s;
@@ -291,6 +428,14 @@ OrderBook::Snapshot OrderBook::getSnapshot() const {
     return s;
 }
 
+/**
+ * @brief Print the current order book (last update id, asks, and bids) to standard output.
+ *
+ * Acquires the internal mutex and writes the last update id followed by all ask
+ * levels sorted ascending by price and all bid levels sorted descending by price.
+ * Prices and quantities are converted from the internal integer representation
+ * to floating-point values using kPriceScale.
+ */
 void OrderBook::printOrderBook() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     std::cout << "Last Update ID: " << lastUpdateId << '\n';
@@ -314,6 +459,14 @@ void OrderBook::printOrderBook() const {
     }
 }
 
+/**
+ * @brief Print a brief summary of order-book counts and best-of-book prices to stdout.
+ *
+ * Acquires the internal mutex and writes the total number of ask and bid price
+ * levels and the best ask/bid (top of OFI view) to standard output. Best prices
+ * are scaled by kPriceScale and formatted with two decimal places; if an OFI
+ * side is empty its best price is reported as 0.00.
+ */
 void OrderBook::printOrderBookStats() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     std::cout << "Total Asks: " << askState.size() << ", Total Bids: " << bidState.size() << '\n';

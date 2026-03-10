@@ -29,6 +29,20 @@ struct ExchangeRuntime {
     std::unique_ptr<IExchangeAdapter> adapter;
 };
 
+/**
+ * @brief Program entry point that loads configuration, validates settings, initializes
+ * exchange runtimes (books, metrics, adapters), starts servers, and enters the monitoring loop.
+ *
+ * Loads JSON configuration (path from argv[1] or "config.json" by default), validates global and
+ * per-exchange settings (including snapshot and OFI depths, exchange names, symbols, and primary
+ * symbol), constructs per-exchange OrderBook and Metrics instances, wires adapter update callbacks
+ * (computes and stores OFI values), starts exchange adapters and the subscriber/metrics servers,
+ * then periodically prints runtime diagnostics.
+ *
+ * @param argc Number of command-line arguments.
+ * @param argv Command-line arguments; argv[1], if present, is treated as the path to the JSON config file.
+ * @return int `0` on normal termination, `-1` on configuration or startup errors.
+ */
 int main(int argc, char* argv[]) {
     const char* configPath = (argc > 1) ? argv[1] : "config.json";
 

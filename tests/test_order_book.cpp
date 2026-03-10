@@ -298,7 +298,12 @@ TEST(OrderBook, ApplyDeltaReturnsDeltasWithGenuineKind) {
     }
 }
 
-// ─── OFI view depth gating ────────────────────────────────────────────────────
+/**
+ * @brief Verifies that an ask level inserted deeper than the configured OFI depth is not considered in the OFI view.
+ *
+ * Sets OFI depth to 2, applies a snapshot with two top ask levels, then inserts a third ask deeper than position 2.
+ * Expects the update to succeed, exactly one delta to be produced, and that delta's `inOfiView` flag to be `false`.
+ */
 
 TEST(OrderBook, LevelBeyondOfiDepthNotInView) {
     // ofiDepth=2: only top-2 ask levels are tracked in the OFI view.
