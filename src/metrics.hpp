@@ -12,6 +12,11 @@ struct Metrics {
     // Reset to 0 on each read (see prometheus_format.hpp).
     std::atomic<long long> ofiAccumulator{0};
 
+    // Set to true once the initial snapshot has been applied and its pre-snapshot
+    // buffer has been fully drained.  Hot-path messages skip bufferMutex when this
+    // is true — it is reset to false on resync/reconnect.
+    std::atomic<bool> liveReady{false};
+
     // Histogram for update processing time (µs).
     // Buckets are cumulative (Prometheus convention): each count includes all
     // observations <= the upper bound.  Index 10 is the +Inf bucket (== total count).

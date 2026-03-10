@@ -21,6 +21,7 @@ option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 if(NOT BUILD_TESTS_ONLY)
     find_package(ixwebsocket CONFIG REQUIRED)
     find_package(httplib CONFIG REQUIRED)
+    find_package(simdjson CONFIG REQUIRED)
 
     # Tell CMake to build an executable named 'lob_app' from your main.cpp
     add_executable(lob_app
@@ -36,6 +37,7 @@ if(NOT BUILD_TESTS_ONLY)
         ixwebsocket::ixwebsocket
         nlohmann_json::nlohmann_json
         httplib::httplib
+        simdjson::simdjson
     )
 endif()
 

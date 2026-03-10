@@ -10,6 +10,8 @@
 #include <stop_token>
 #include <thread>
 
+#include "decimal.hpp"
+
 namespace {
 constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
 }
@@ -122,6 +124,10 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
             }
         }
         symbolBuffers[canonical].clear();
+        auto mit = metricsMap->find(canonical);
+        if (mit != metricsMap->end()) {
+            mit->second->liveReady.store(true, std::memory_order_release);
+        }
         return true;
     } catch (const std::exception& e) {
         fprintf(stderr, "[%s] snapshot error: %s\n", canonical.c_str(), e.what());
@@ -179,6 +185,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             if (mit != metricsMap->end()) {
                 mit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
                 mit->second->ofiAccumulator.store(0, std::memory_order_relaxed);
+                mit->second->liveReady.store(false, std::memory_order_relaxed);
             }
         }
         {
@@ -201,20 +208,26 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     }
 
     try {
-        // Start timing before parse so we capture the full per-message cost.
+        // --- symbol identification (needed on every path) ---
+        // Use simdjson to extract the stream name without building a DOM.
+        // padded_string copies msg->str with SIMDJSON_PADDING suffix so the
+        // SIMD parser can read past the payload safely.
         const auto start = std::chrono::high_resolution_clock::now();
+        simdjson::padded_string padded(msg->str);
+        auto doc = simdParser_.iterate(padded);
 
-        // Combo stream wraps each message: {"stream":"btcusdt@depth","data":{...}}
-        auto outer = nlohmann::json::parse(msg->str);
-        const std::string binanceSym = streamToSymbol(outer["stream"].get<std::string>());
-        const auto& jsonMsg = outer["data"];
+        std::string_view stream_sv = doc.find_field_unordered("stream").get_string().value();
+        // Inline streamToSymbol: prefix before '@', uppercased.
+        const auto at_pos = stream_sv.find('@');
+        std::string binanceSym(stream_sv.substr(0, at_pos));
+        std::transform(binanceSym.begin(), binanceSym.end(), binanceSym.begin(),
+                       [](unsigned char c) { return ::toupper(c); });
 
-        // Translate Binance-specific symbol to canonical (e.g. "BTCUSDT" → "BTC-USDT").
         auto canonIt = binanceToCanonical_.find(binanceSym);
         if (canonIt == binanceToCanonical_.end()) {
             return;  // unknown symbol
         }
-        const std::string& sym = canonIt->second;  // canonical
+        const std::string& sym = canonIt->second;
 
         auto booksIt = books->find(sym);
         auto metricsIt = metricsMap->find(sym);
@@ -224,47 +237,125 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         OrderBook& book = *booksIt->second;
         Metrics& metrics = *metricsIt->second;
 
-        // Buffer until snapshot is applied for this symbol (keyed by canonical).
-        {
-            std::lock_guard<std::mutex> lock(bufferMutex);
-            if (!book.isSnapshotApplied()) {
-                if (symbolBuffers[sym].size() < kMaxBufferedMsgsPerSymbol) {
-                    symbolBuffers[sym].push_back(jsonMsg);
+        // --- B: fast path — snapshot fully live, skip bufferMutex entirely ---
+        if (!metrics.liveReady.load(std::memory_order_acquire)) {
+            // Slow path: startup / resync window.
+            // Parse full message with nlohmann for buffering (cold path).
+            auto outer = nlohmann::json::parse(msg->str);
+            const auto& jsonMsg = outer["data"];
+            {
+                std::lock_guard<std::mutex> lock(bufferMutex);
+                if (!book.isSnapshotApplied()) {
+                    if (symbolBuffers[sym].size() < kMaxBufferedMsgsPerSymbol) {
+                        symbolBuffers[sym].push_back(jsonMsg);
+                    }
+                    return;
                 }
+                // Snapshot applied and buffer drained (we hold bufferMutex; fetchAndApplySnapshot
+                // already released it).  Mark this symbol live so future messages skip this path.
+                metrics.liveReady.store(true, std::memory_order_release);
+            }
+            // Process this first live update via the nlohmann path.
+            const long long eventTime = jsonMsg["E"].get<long long>();
+            const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::system_clock::now().time_since_epoch())
+                                      .count();
+            metrics.lastEventLagMs.store(now - eventTime);
+            auto result = book.applyUpdate(jsonMsg, EventKind::Genuine);
+            if (!result.success) {
+                printf("[%s] missed updates, resyncing\n", sym.c_str());
+                book.clear();
+                metrics.lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+                metrics.ofiAccumulator.store(0, std::memory_order_relaxed);
+                metrics.liveReady.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> lock(bufferMutex);
+                    symbolBuffers[sym].clear();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(resyncMutex);
+                    resyncQueue.push(sym);
+                }
+                resyncCv.notify_one();
                 return;
             }
+            const auto end = std::chrono::high_resolution_clock::now();
+            metrics.recordProcessingUs(
+                std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+            metrics.msgCount.fetch_add(1);
+            metrics.lastUpdateTimeMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now().time_since_epoch())
+                                               .count(),
+                                           std::memory_order_relaxed);
+            if (updateCallback_) {
+                updateCallback_(exchangeName(), sym, result.deltas, eventTime);
+            }
+            return;
         }
 
-        // Event lag metric
-        long long eventTime = jsonMsg["E"].get<long long>();
-        long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch())
-                            .count();
+        // --- A: live fast path — simdjson, no heap allocation, no lock ---
+        auto data = doc.find_field_unordered("data").get_object().value();
+
+        const long long eventTime =
+            static_cast<long long>(data.find_field_unordered("E").get_int64().value());
+        const long long firstId = static_cast<long long>(data.find_field_unordered("U").get_int64().value());
+        const long long lastId = static_cast<long long>(data.find_field_unordered("u").get_int64().value());
+
+        // Extract bid and ask levels into thread-local pre-allocated vectors.
+        // string_view elements point into `padded` which lives for the whole scope.
+        thread_local std::vector<std::pair<long long, long long>> tlBids, tlAsks;
+        tlBids.clear();
+        tlAsks.clear();
+
+        for (auto bid_level : data.find_field_unordered("b").get_array()) {
+            auto arr = bid_level.get_array().value();
+            auto it = arr.begin();
+            if (it == arr.end()) continue;  // skip malformed
+            const std::string_view price_sv = (*it).get_string().value();
+            +it;
+            if (it == arr.end()) continue;  // skip malformed
+            const std::string_view qty_sv = (*it).get_string().value();
+            tlBids.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
+        }
+        for (auto ask_level : data.find_field_unordered("a").get_array()) {
+            auto arr = ask_level.get_array().value();
+            auto it = arr.begin();
+            if (it == arr.end()) continue;  // skip malformed
+            const std::string_view price_sv = (*it).get_string().value();
+            +it;
+            if (it == arr.end()) continue;  // skip malformed
+            const std::string_view qty_sv = (*it).get_string().value();
+            tlAsks.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
+        }
+
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
         metrics.lastEventLagMs.store(now - eventTime);
 
-        auto result = book.applyUpdate(jsonMsg, EventKind::Genuine);
+        auto result = book.applyUpdate(firstId, lastId, tlAsks, tlBids, EventKind::Genuine);
+
         if (!result.success) {
             printf("[%s] missed updates, resyncing\n", sym.c_str());
             book.clear();
-            // Mark as awaiting snapshot so the watchdog skips this symbol
-            // while runResyncWorker() is already recovering it.
             metrics.lastUpdateTimeMs.store(0, std::memory_order_relaxed);
             metrics.ofiAccumulator.store(0, std::memory_order_relaxed);
+            metrics.liveReady.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lock(bufferMutex);
                 symbolBuffers[sym].clear();
             }
             {
                 std::lock_guard<std::mutex> lock(resyncMutex);
-                resyncQueue.push(sym);  // canonical symbol in queue
+                resyncQueue.push(sym);
             }
             resyncCv.notify_one();
             return;
         }
-        auto end = std::chrono::high_resolution_clock::now();
-        long long processingUs =
-            std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-        metrics.recordProcessingUs(processingUs);
+
+        const auto end = std::chrono::high_resolution_clock::now();
+        metrics.recordProcessingUs(
+            std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
         metrics.msgCount.fetch_add(1);
         metrics.lastUpdateTimeMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
                                            std::chrono::steady_clock::now().time_since_epoch())
@@ -344,23 +435,19 @@ void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token sto
 }
 
 /**
- * @brief Initialize the adapter for a set of trading symbols, establish streaming, start
- * the resync worker, and load initial order book snapshots.
+ * @brief Initialize the adapter for the given symbols, open the Binance combined WebSocket,
+ * start background workers, and obtain initial REST snapshots for each symbol.
  *
- * Validates that each symbol has an associated OrderBook and Metrics, configures internal
- * references and snapshot depth, opens the Binance combined WebSocket stream for the symbols,
- * starts the background resync thread, and concurrently fetches and applies initial REST
- * snapshots for each symbol with retry/backoff and a staggered launch to avoid rate limits.
+ * Configures internal references to the provided OrderBook and Metrics maps, subscribes to the
+ * specified canonical symbols, starts the resynchronization and watchdog workers, and concurrently
+ * fetches and applies each symbol's initial REST order book snapshot with retry and backoff.
  *
- * @param symbols List of symbol names to subscribe and initialize (e.g., "BTCUSDT").
- * @param booksRef Map of symbol -> owned OrderBook instances; must contain every symbol.
- * @param metricsMapRef Map of symbol -> owned Metrics instances; must contain every symbol.
- * @param snapshotDepthArg Depth parameter used when requesting REST order book snapshots.
- * @param maxSnapshotRetries Maximum number of attempts per-symbol to fetch and apply the initial
- * snapshot.
- * @return true if the adapter connected and all initial snapshots were successfully applied;
- * `false` if validation failed, the WebSocket failed to connect, or any symbol failed to obtain a
- * snapshot.
+ * @param symbols List of canonical symbol names to subscribe (e.g., "BTC-USDT").
+ * @param booksRef Map from canonical symbol to owned OrderBook instances; must contain every entry in `symbols`.
+ * @param metricsMapRef Map from canonical symbol to owned Metrics instances; must contain every entry in `symbols`.
+ * @param snapshotDepthArg Depth to request for each REST order book snapshot.
+ * @param maxSnapshotRetries Maximum attempts to fetch and apply each initial snapshot.
+ * @return true if the WebSocket connected and all initial snapshots were successfully applied; `false` if validation failed, the WebSocket failed to connect, or any snapshot failed.
  */
 bool BinanceAdapter::start(const std::vector<std::string>& symbols,
                            std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,
@@ -393,6 +480,7 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
     // Reset data-age sentinels so the watchdog doesn't fire before first snapshot.
     for (const auto& sym : symbols) {
         metricsMapRef.at(sym)->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+        metricsMapRef.at(sym)->liveReady.store(false, std::memory_order_relaxed);
     }
     lastConnectionActivityMs_.store(0, std::memory_order_relaxed);
     {

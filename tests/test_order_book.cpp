@@ -449,8 +449,8 @@ TEST(OrderBook, OfiViewBidRefillsWhenLevelRemovedFromView) {
     // ofiDepth=2 with 3 bid levels. Remove the best bid; position 3 should slide into view.
     // ofiBids view: [50000, 49999]; 49998 is in state but outside the view.
     OrderBook book(2);
-    book.applySnapshot(makeSnapshot(
-        100, {}, {{"50000.00", "1.0"}, {"49999.00", "1.0"}, {"49998.00", "1.0"}}));
+    book.applySnapshot(
+        makeSnapshot(100, {}, {{"50000.00", "1.0"}, {"49999.00", "1.0"}, {"49998.00", "1.0"}}));
 
     // Remove best bid (50000). State still has 49999 and 49998, both should now be in view.
     auto result =

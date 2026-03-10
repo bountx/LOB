@@ -1,5 +1,6 @@
 #pragma once
 #include <ixwebsocket/IXWebSocket.h>
+#include <simdjson.h>
 
 #include <condition_variable>
 #include <memory>
@@ -88,4 +89,6 @@ private:
 
     // Detects a silently stalled feed and forces a reconnect via webSocket.stop().
     void runWatchdog(std::stop_token stoken);
+
+    simdjson::ondemand::parser simdParser_;
 };
