@@ -132,13 +132,17 @@ inline nlohmann::json bookLevelsToJson(const std::map<long long, long long, Comp
 }
 
 /**
- * @brief Convert an ordered list of scaled price/quantity pairs into a JSON array of formatted entries.
+ * @brief Convert an ordered list of scaled price/quantity pairs into a JSON array of formatted
+ * entries.
  *
- * Converts each pair {price, qty}, where values are fixed-point integers scaled by 1e8, into a two-element JSON array
- * [ "price", "qty" ] with both numbers rendered as canonical decimal strings. The input order is preserved in the output.
+ * Converts each pair {price, qty}, where values are fixed-point integers scaled by 1e8, into a
+ * two-element JSON array [ "price", "qty" ] with both numbers rendered as canonical decimal
+ * strings. The input order is preserved in the output.
  *
- * @param levels Ordered vector of {scaled_price, scaled_qty} pairs; each value is an integer representing the real number multiplied by 1e8.
- * @return nlohmann::json A JSON array of two-element arrays, each containing the formatted price and quantity as strings.
+ * @param levels Ordered vector of {scaled_price, scaled_qty} pairs; each value is an integer
+ * representing the real number multiplied by 1e8.
+ * @return nlohmann::json A JSON array of two-element arrays, each containing the formatted price
+ * and quantity as strings.
  */
 inline nlohmann::json bookLevelsToJson(const std::vector<std::pair<long long, long long>>& levels) {
     auto arr = nlohmann::json::array();

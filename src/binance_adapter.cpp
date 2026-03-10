@@ -53,7 +53,8 @@ void BinanceAdapter::stop() {
 }
 
 /**
- * @brief Fetches a REST order-book snapshot from Binance for a symbol and applies it to an OrderBook.
+ * @brief Fetches a REST order-book snapshot from Binance for a symbol and applies it to an
+ * OrderBook.
  *
  * Attempts to download the snapshot for binanceSym, apply it to orderBook, and then replay any
  * pre-snapshot buffered websocket updates for the same canonical symbol atomically. If the HTTP
@@ -64,7 +65,8 @@ void BinanceAdapter::stop() {
  * @param canonical Canonical/internal symbol corresponding to binanceSym (used for buffering/logs).
  * @param orderBook OrderBook instance that will receive the snapshot and replayed updates.
  * @param stoken Stop token that interrupts waits caused by rate limiting or IP ban handling.
- * @return `true` if the snapshot was applied and all buffered updates were successfully replayed; `false` otherwise.
+ * @return `true` if the snapshot was applied and all buffered updates were successfully replayed;
+ * `false` otherwise.
  */
 bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
                                            const std::string& canonical, OrderBook& orderBook,

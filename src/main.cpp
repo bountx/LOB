@@ -40,7 +40,8 @@ struct ExchangeRuntime {
  * then periodically prints runtime diagnostics.
  *
  * @param argc Number of command-line arguments.
- * @param argv Command-line arguments; argv[1], if present, is treated as the path to the JSON config file.
+ * @param argv Command-line arguments; argv[1], if present, is treated as the path to the JSON
+ * config file.
  * @return int `0` on normal termination, `-1` on configuration or startup errors.
  */
 int main(int argc, char* argv[]) {
