@@ -65,11 +65,12 @@ void KrakenAdapter::handleBookSnapshot(const nlohmann::json& data) {
 /**
  * @brief Apply an incremental order book update from Kraken for a single symbol.
  *
- * Processes the provided Kraken update payload for its symbol, updates the corresponding OrderBook and Metrics,
- * records processing time and event lag, increments message counters, and invokes the registered update callback
- * with the computed deltas and the event timestamp.
+ * Processes the provided Kraken update payload for its symbol, updates the corresponding OrderBook
+ * and Metrics, records processing time and event lag, increments message counters, and invokes the
+ * registered update callback with the computed deltas and the event timestamp.
  *
- * @param data JSON object representing one entry from Kraken's "data" array in a book update message.
+ * @param data JSON object representing one entry from Kraken's "data" array in a book update
+ * message.
  */
 void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
     const std::string krakenSym = data["symbol"].get<std::string>();

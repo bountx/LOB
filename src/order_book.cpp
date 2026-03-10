@@ -80,7 +80,8 @@ void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
  * @param update JSON object containing update fields `U`, `u`, `a` (asks) and `b` (bids).
  * @param kind Type of event driving this update (e.g., Maintenance or Backfill).
  * @return UpdateResult `success` is `true` when the update was applied (or already applied),
- *         `false` when a gap was detected. `deltas` contains emitted level and OFI membership changes.
+ *         `false` when a gap was detected. `deltas` contains emitted level and OFI membership
+ * changes.
  */
 UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind) {
     // Parse sequence IDs and all level data before acquiring the lock so that
@@ -126,10 +127,13 @@ UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind
  * book, updating OFI views and emitting LevelDelta records for direct changes and any
  * secondary changes caused by OFI membership updates.
  *
- * @param bidsArr JSON array of bid levels; each element must be an array ["price", "quantity"] with string values.
- * @param asksArr JSON array of ask levels; each element must be an array ["price", "quantity"] with string values.
+ * @param bidsArr JSON array of bid levels; each element must be an array ["price", "quantity"] with
+ * string values.
+ * @param asksArr JSON array of ask levels; each element must be an array ["price", "quantity"] with
+ * string values.
  * @param kind EventKind indicating the source/type of the update (e.g., Maintenance or Backfill).
- * @return std::vector<LevelDelta> Vector of LevelDelta entries produced by applying the provided updates.
+ * @return std::vector<LevelDelta> Vector of LevelDelta entries produced by applying the provided
+ * updates.
  */
 std::vector<LevelDelta> OrderBook::applyDelta(const nlohmann::json& bidsArr,
                                               const nlohmann::json& asksArr, EventKind kind) {
@@ -159,13 +163,16 @@ std::vector<LevelDelta> OrderBook::applyDelta(const nlohmann::json& bidsArr,
 }
 
 /**
- * @brief Apply a single price-level change to the internal state and update OFI views, emitting resulting deltas.
+ * @brief Apply a single price-level change to the internal state and update OFI views, emitting
+ * resulting deltas.
  *
- * Applies the new quantity for `price` on the bid side if `isBid` is true, otherwise on the ask side.
- * Updates the OFI (top-of-book) view for that side and appends one or more LevelDelta entries to `out`
- * describing the direct change to `price` and any secondary view-membership changes caused by the update.
+ * Applies the new quantity for `price` on the bid side if `isBid` is true, otherwise on the ask
+ * side. Updates the OFI (top-of-book) view for that side and appends one or more LevelDelta entries
+ * to `out` describing the direct change to `price` and any secondary view-membership changes caused
+ * by the update.
  *
- * If the net quantity change for `price` is zero, the function performs no mutation and appends no deltas.
+ * If the net quantity change for `price` is zero, the function performs no mutation and appends no
+ * deltas.
  *
  * @param price Integer-encoded price key (scaled).
  * @param newQty New integer-encoded quantity for the price; zero means remove the level.
@@ -218,7 +225,8 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
 
     if (viewChange.evictedPrice != 0) {
         const long long q = viewChange.evictedQty;
-        out.push_back(LevelDelta{viewChange.evictedPrice, q, -q, isBid, true, false, secondaryKind});
+        out.push_back(
+            LevelDelta{viewChange.evictedPrice, q, -q, isBid, true, false, secondaryKind});
     }
     if (viewChange.replacementPrice != 0) {
         const long long q = viewChange.replacementQty;
@@ -228,7 +236,7 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
 }
 
 OrderBook::ViewChangeResult OrderBook::updateOfiView(long long price, long long newQty,
-                                                    bool isBid) {
+                                                     bool isBid) {
     ViewChangeResult result;
     if (isBid) {
         // ofiBids sorted descending: front = best bid, back = worst bid in view.
