@@ -312,7 +312,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             auto it = arr.begin();
             if (it == arr.end()) continue;  // skip malformed
             const std::string_view price_sv = (*it).get_string().value();
-            +it;
+            ++it;
             if (it == arr.end()) continue;  // skip malformed
             const std::string_view qty_sv = (*it).get_string().value();
             tlBids.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
@@ -322,7 +322,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             auto it = arr.begin();
             if (it == arr.end()) continue;  // skip malformed
             const std::string_view price_sv = (*it).get_string().value();
-            +it;
+            ++it;
             if (it == arr.end()) continue;  // skip malformed
             const std::string_view qty_sv = (*it).get_string().value();
             tlAsks.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
