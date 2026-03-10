@@ -435,23 +435,19 @@ void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token sto
 }
 
 /**
- * @brief Initialize the adapter for a set of trading symbols, establish streaming, start
- * the resync worker, and load initial order book snapshots.
+ * @brief Initialize the adapter for the given symbols, open the Binance combined WebSocket,
+ * start background workers, and obtain initial REST snapshots for each symbol.
  *
- * Validates that each symbol has an associated OrderBook and Metrics, configures internal
- * references and snapshot depth, opens the Binance combined WebSocket stream for the symbols,
- * starts the background resync thread, and concurrently fetches and applies initial REST
- * snapshots for each symbol with retry/backoff and a staggered launch to avoid rate limits.
+ * Configures internal references to the provided OrderBook and Metrics maps, subscribes to the
+ * specified canonical symbols, starts the resynchronization and watchdog workers, and concurrently
+ * fetches and applies each symbol's initial REST order book snapshot with retry and backoff.
  *
- * @param symbols List of symbol names to subscribe and initialize (e.g., "BTCUSDT").
- * @param booksRef Map of symbol -> owned OrderBook instances; must contain every symbol.
- * @param metricsMapRef Map of symbol -> owned Metrics instances; must contain every symbol.
- * @param snapshotDepthArg Depth parameter used when requesting REST order book snapshots.
- * @param maxSnapshotRetries Maximum number of attempts per-symbol to fetch and apply the initial
- * snapshot.
- * @return true if the adapter connected and all initial snapshots were successfully applied;
- * `false` if validation failed, the WebSocket failed to connect, or any symbol failed to obtain a
- * snapshot.
+ * @param symbols List of canonical symbol names to subscribe (e.g., "BTC-USDT").
+ * @param booksRef Map from canonical symbol to owned OrderBook instances; must contain every entry in `symbols`.
+ * @param metricsMapRef Map from canonical symbol to owned Metrics instances; must contain every entry in `symbols`.
+ * @param snapshotDepthArg Depth to request for each REST order book snapshot.
+ * @param maxSnapshotRetries Maximum attempts to fetch and apply each initial snapshot.
+ * @return true if the WebSocket connected and all initial snapshots were successfully applied; `false` if validation failed, the WebSocket failed to connect, or any snapshot failed.
  */
 bool BinanceAdapter::start(const std::vector<std::string>& symbols,
                            std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,

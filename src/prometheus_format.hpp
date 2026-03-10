@@ -74,26 +74,17 @@ inline std::string escapeLabelValue(std::string_view v) {
 //
 // Spread and best-price lines are skipped when the book is empty (no snapshot
 /**
- * Builds a Prometheus text exposition containing adapter metrics and order book statistics,
- * emitting metric lines labeled with `exchange` and `symbol`.
+ * @brief Constructs a Prometheus text exposition of adapter and order-book metrics, labeling each metric with `exchange` and `symbol`.
  *
- * Emits the following metrics when available:
- * - lob_messages_total
- * - lob_event_lag_milliseconds
- * - lob_processing_time_microseconds (histogram: _bucket, _sum, _count)
- * - lob_orderbook_asks_count
- * - lob_orderbook_bids_count
- * - lob_orderbook_best_ask_price (only for positive best-ask)
- * - lob_orderbook_best_bid_price (only for positive best-bid)
- * - lob_orderbook_spread_price (only when both best-ask and best-bid are positive)
- * - lob_process_rss_bytes (process RSS)
- * - lob_subscriber_* (when subStats is non-null)
+ * Emits counters, gauges and histograms for per-symbol metrics (messages, event lag, processing time buckets/sum/count,
+ * order book levels and prices, spread, OFI) and optional process- and subscriber-level metrics.
  *
- * @param exchange Identifier for the adapter; used as the `exchange` label value.
- * @param metricsMap Map from symbol to Metrics; used for message counts and processing/lag values.
- * @param books Map from symbol to OrderBook; used to obtain per-symbol order book stats.
- * @param subStats Optional subscriber server stats; omitted from output when null.
- * @return std::string Prometheus exposition text including HELP/TYPE headers and metric lines.
+ * @param exchange Label value used for the `exchange` metric label.
+ * @param metricsMap Map from symbol to `Metrics`; used to emit per-symbol counters, gauges, histograms and OFI values.
+ * @param books Map from symbol to `OrderBook`; `getStats()` is called once per book to obtain per-symbol order-book statistics.
+ * @param subStats Optional subscriber server stats; when non-null, subscriber-related metrics are emitted. Omit to skip these metrics.
+ * @param emitHeaders If true, HELP and TYPE headers are included for emitted metrics; when false, only metric lines are produced.
+ * @return std::string Prometheus exposition text containing metric lines (and HELP/TYPE headers when `emitHeaders` is true).
  */
 inline std::string buildPrometheusOutput(
     std::string_view exchange,

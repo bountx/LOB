@@ -67,21 +67,23 @@ void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
 }
 
 /**
- * @brief Apply an incremental order-book update and produce resulting deltas.
+ * @brief Apply a parsed incremental update to the order book and produce level/OFI deltas.
  *
- * Parses the provided JSON update, validates sequence continuity against the
- * current lastUpdateId, applies each level change to internal state, updates
- * lastUpdateId when successful, and returns an UpdateResult containing a
- * success flag and any emitted LevelDelta entries.
+ * Requires the caller to hold orderBookMutex. Validates sequence continuity using
+ * `firstId`/`lastId`, applies the provided ask and bid level changes to internal
+ * state, advances `lastUpdateId` on success, and accumulates any emitted
+ * LevelDelta entries describing direct level changes and OFI-view side effects.
  *
- * Parsing of the JSON and level values occurs before any mutation of live
- * state; if parsing throws, the live order book is not modified.
+ * If `lastId` is less than or equal to the current `lastUpdateId`, the update
+ * is treated as already applied and no deltas are produced. If `firstId` is
+ * greater than `lastUpdateId + 1`, a gap is detected and the update is not applied.
  *
- * @param update JSON object containing update fields `U`, `u`, `a` (asks) and `b` (bids).
- * @param kind Type of event driving this update (e.g., Maintenance or Backfill).
- * @return UpdateResult `success` is `true` when the update was applied (or already applied),
- *         `false` when a gap was detected. `deltas` contains emitted level and OFI membership
- * changes.
+ * @param firstId First sequence id of the incoming update range.
+ * @param lastId Last sequence id of the incoming update range.
+ * @param asks Span of (price, quantity) pairs representing ask-level updates; values are stored as internal scaled integers.
+ * @param bids Span of (price, quantity) pairs representing bid-level updates; values are stored as internal scaled integers.
+ * @param kind Event kind that categorizes emitted deltas (e.g., Maintenance or Backfill).
+ * @return UpdateResult `success` is `true` when the update was applied (or already applied), `false` when a gap was detected. `deltas` contains emitted LevelDelta entries.
  */
 UpdateResult OrderBook::applyUpdateCore(long long firstId, long long lastId,
                                         std::span<const std::pair<long long, long long>> asks,
@@ -107,6 +109,24 @@ UpdateResult OrderBook::applyUpdateCore(long long firstId, long long lastId,
     return result;
 }
 
+/**
+ * @brief Parse a JSON incremental update and apply it to the live order book.
+ *
+ * Parses the JSON fields for first and last update IDs and the ask/bid level
+ * arrays, then applies the parsed update to the book under the internal mutex.
+ * Parsing is performed before acquiring the mutex so parse failures do not
+ * partially mutate the live state.
+ *
+ * @param update JSON object containing incremental update fields:
+ *               - "U": first update ID
+ *               - "u": last update ID
+ *               - "a": array of ask levels [price, quantity]
+ *               - "b": array of bid levels [price, quantity]
+ * @param kind   Event kind to attribute to resulting level deltas.
+ * @return UpdateResult Result describing whether the update was applied and any
+ *                      generated level deltas; indicates failure when the
+ *                      update is out-of-order or a gap is detected. 
+ */
 UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind) {
     // Parse all data before acquiring the lock so a JSON exception cannot leave
     // the live book half-mutated.
@@ -125,6 +145,20 @@ UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind
     return applyUpdateCore(firstId, lastId, asks, bids, kind);
 }
 
+/**
+ * @brief Applies a parsed incremental update to the order book using an ID range and level changes.
+ *
+ * Applies the provided asks and bids (price/quantity pairs) for update IDs in the closed interval
+ * [firstId, lastId] and returns the resulting update outcome and any level deltas.
+ *
+ * @param firstId First update identifier in the incoming update sequence.
+ * @param lastId Last update identifier in the incoming update sequence.
+ * @param asks Span of ask levels as (price, quantity) pairs; both values are stored as integers using kPriceScale.
+ * @param bids Span of bid levels as (price, quantity) pairs; both values are stored as integers using kPriceScale.
+ * @param kind EventKind that classifies the origin of the update (affects how deltas are labeled).
+ * @return UpdateResult Result describing whether the update was applied and the list of produced LevelDelta entries.
+ *         On detection of a gap (missing updates) the result indicates failure and contains no deltas.
+ */
 UpdateResult OrderBook::applyUpdate(long long firstId, long long lastId,
                                     std::span<const std::pair<long long, long long>> asks,
                                     std::span<const std::pair<long long, long long>> bids,
