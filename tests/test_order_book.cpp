@@ -417,6 +417,70 @@ TEST(OrderBook, OfiViewRefillsWhenLevelRemovedFromView) {
     EXPECT_GT(result.deltas[1].deltaQty, 0LL);  // positive: view qty grew
 }
 
+// ─── OFI view bid-side eviction and refill ────────────────────────────────────
+
+TEST(OrderBook, OfiViewBidEvictionWhenViewFull) {
+    // ofiDepth=2: a new bid that beats the current worst bid in the view enters the view.
+    // ofiBids sorted descending: [49999, 49998]; worst bid in view = 49998.
+    // A new bid at 50000 beats 49998, enters the view, evicts 49998.
+    OrderBook book(2);
+    book.applySnapshot(makeSnapshot(100, {}, {{"49999.00", "1.0"}, {"49998.00", "0.8"}}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {}, {{"50000.00", "0.5"}}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // Direct delta: 50000 enters the view.
+    ASSERT_GE(result.deltas.size(), 1u);
+    EXPECT_EQ(result.deltas[0].kind, EventKind::Genuine);
+    EXPECT_TRUE(result.deltas[0].inOfiView);
+    EXPECT_EQ(result.deltas[0].price, 5000000000000LL);  // 50000.00 * 1e8
+
+    // Maintenance delta: 49998 is evicted from the now-full view.
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_EQ(result.deltas[1].price, 4999800000000LL);  // 49998.00 * 1e8
+    EXPECT_TRUE(result.deltas[1].wasInView);
+    EXPECT_FALSE(result.deltas[1].inOfiView);
+    EXPECT_LT(result.deltas[1].deltaQty, 0LL);  // negative: view qty dropped to 0
+}
+
+TEST(OrderBook, OfiViewBidRefillsWhenLevelRemovedFromView) {
+    // ofiDepth=2 with 3 bid levels. Remove the best bid; position 3 should slide into view.
+    // ofiBids view: [50000, 49999]; 49998 is in state but outside the view.
+    OrderBook book(2);
+    book.applySnapshot(makeSnapshot(
+        100, {}, {{"50000.00", "1.0"}, {"49999.00", "1.0"}, {"49998.00", "1.0"}}));
+
+    // Remove best bid (50000). State still has 49999 and 49998, both should now be in view.
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {}, {{"50000.00", "0.0"}}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // getStats() best bid must now be 49999.
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestBid, 49999.0, 1e-6);
+
+    // The snapshot must contain both remaining levels.
+    auto snap = book.getSnapshot();
+    EXPECT_EQ(snap.bids.size(), 2u);
+
+    // Direct delta: removal of 50000 (Genuine, was in view, now gone).
+    ASSERT_GE(result.deltas.size(), 1u);
+    EXPECT_EQ(result.deltas[0].kind, EventKind::Genuine);
+    EXPECT_TRUE(result.deltas[0].wasInView);
+    EXPECT_FALSE(result.deltas[0].inOfiView);
+    EXPECT_EQ(result.deltas[0].newQty, 0LL);
+
+    // Maintenance delta: 49998 slides into the view as a replacement.
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_EQ(result.deltas[1].price, 4999800000000LL);  // 49998.00 * 1e8
+    EXPECT_FALSE(result.deltas[1].wasInView);
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);  // positive: view qty grew from 0
+}
+
 // ─── OFI formula ──────────────────────────────────────────────────────────────
 
 TEST(OrderBook, OfiComputationBidMinusAsk) {
