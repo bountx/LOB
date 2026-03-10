@@ -10,6 +10,8 @@
 #include <stop_token>
 #include <thread>
 
+#include "decimal.hpp"
+
 namespace {
 constexpr std::size_t kMaxBufferedMsgsPerSymbol = 5000;
 }
@@ -122,6 +124,10 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
             }
         }
         symbolBuffers[canonical].clear();
+        auto mit = metricsMap->find(canonical);
+        if (mit != metricsMap->end()) {
+            mit->second->liveReady.store(true, std::memory_order_release);
+        }
         return true;
     } catch (const std::exception& e) {
         fprintf(stderr, "[%s] snapshot error: %s\n", canonical.c_str(), e.what());
@@ -179,6 +185,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             if (mit != metricsMap->end()) {
                 mit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
                 mit->second->ofiAccumulator.store(0, std::memory_order_relaxed);
+                mit->second->liveReady.store(false, std::memory_order_relaxed);
             }
         }
         {
@@ -201,20 +208,26 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
     }
 
     try {
-        // Start timing before parse so we capture the full per-message cost.
+        // --- symbol identification (needed on every path) ---
+        // Use simdjson to extract the stream name without building a DOM.
+        // padded_string copies msg->str with SIMDJSON_PADDING suffix so the
+        // SIMD parser can read past the payload safely.
         const auto start = std::chrono::high_resolution_clock::now();
+        simdjson::padded_string padded(msg->str);
+        auto doc = simdParser_.iterate(padded);
 
-        // Combo stream wraps each message: {"stream":"btcusdt@depth","data":{...}}
-        auto outer = nlohmann::json::parse(msg->str);
-        const std::string binanceSym = streamToSymbol(outer["stream"].get<std::string>());
-        const auto& jsonMsg = outer["data"];
+        std::string_view stream_sv = doc.find_field("stream").get_string().value();
+        // Inline streamToSymbol: prefix before '@', uppercased.
+        const auto at_pos = stream_sv.find('@');
+        std::string binanceSym(stream_sv.substr(0, at_pos));
+        std::transform(binanceSym.begin(), binanceSym.end(), binanceSym.begin(),
+                       [](unsigned char c) { return ::toupper(c); });
 
-        // Translate Binance-specific symbol to canonical (e.g. "BTCUSDT" → "BTC-USDT").
         auto canonIt = binanceToCanonical_.find(binanceSym);
         if (canonIt == binanceToCanonical_.end()) {
             return;  // unknown symbol
         }
-        const std::string& sym = canonIt->second;  // canonical
+        const std::string& sym = canonIt->second;
 
         auto booksIt = books->find(sym);
         auto metricsIt = metricsMap->find(sym);
@@ -224,47 +237,121 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         OrderBook& book = *booksIt->second;
         Metrics& metrics = *metricsIt->second;
 
-        // Buffer until snapshot is applied for this symbol (keyed by canonical).
-        {
-            std::lock_guard<std::mutex> lock(bufferMutex);
-            if (!book.isSnapshotApplied()) {
-                if (symbolBuffers[sym].size() < kMaxBufferedMsgsPerSymbol) {
-                    symbolBuffers[sym].push_back(jsonMsg);
+        // --- B: fast path — snapshot fully live, skip bufferMutex entirely ---
+        if (!metrics.liveReady.load(std::memory_order_acquire)) {
+            // Slow path: startup / resync window.
+            // Parse full message with nlohmann for buffering (cold path).
+            auto outer = nlohmann::json::parse(msg->str);
+            const auto& jsonMsg = outer["data"];
+            {
+                std::lock_guard<std::mutex> lock(bufferMutex);
+                if (!book.isSnapshotApplied()) {
+                    if (symbolBuffers[sym].size() < kMaxBufferedMsgsPerSymbol) {
+                        symbolBuffers[sym].push_back(jsonMsg);
+                    }
+                    return;
                 }
+                // Snapshot applied and buffer drained (we hold bufferMutex; fetchAndApplySnapshot
+                // already released it).  Mark this symbol live so future messages skip this path.
+                metrics.liveReady.store(true, std::memory_order_release);
+            }
+            // Process this first live update via the nlohmann path.
+            const long long eventTime = jsonMsg["E"].get<long long>();
+            const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::system_clock::now().time_since_epoch())
+                                      .count();
+            metrics.lastEventLagMs.store(now - eventTime);
+            auto result = book.applyUpdate(jsonMsg, EventKind::Genuine);
+            if (!result.success) {
+                printf("[%s] missed updates, resyncing\n", sym.c_str());
+                book.clear();
+                metrics.lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+                metrics.ofiAccumulator.store(0, std::memory_order_relaxed);
+                metrics.liveReady.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> lock(bufferMutex);
+                    symbolBuffers[sym].clear();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(resyncMutex);
+                    resyncQueue.push(sym);
+                }
+                resyncCv.notify_one();
                 return;
             }
+            const auto end = std::chrono::high_resolution_clock::now();
+            metrics.recordProcessingUs(
+                std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+            metrics.msgCount.fetch_add(1);
+            metrics.lastUpdateTimeMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now().time_since_epoch())
+                                               .count(),
+                                           std::memory_order_relaxed);
+            if (updateCallback_) {
+                updateCallback_(exchangeName(), sym, result.deltas, eventTime);
+            }
+            return;
         }
 
-        // Event lag metric
-        long long eventTime = jsonMsg["E"].get<long long>();
-        long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch())
-                            .count();
+        // --- A: live fast path — simdjson, no heap allocation, no lock ---
+        auto data = doc.find_field("data").get_object().value();
+
+        const long long eventTime =
+            static_cast<long long>(data.find_field("E").get_int64().value());
+        const long long firstId = static_cast<long long>(data.find_field("U").get_int64().value());
+        const long long lastId = static_cast<long long>(data.find_field("u").get_int64().value());
+
+        // Extract bid and ask levels into thread-local pre-allocated vectors.
+        // string_view elements point into `padded` which lives for the whole scope.
+        thread_local std::vector<std::pair<long long, long long>> tlBids, tlAsks;
+        tlBids.clear();
+        tlAsks.clear();
+
+        for (auto bid_level : data.find_field("b").get_array()) {
+            auto arr = bid_level.get_array().value();
+            auto it = arr.begin();
+            const std::string_view price_sv = (*it).get_string().value();
+            ++it;
+            const std::string_view qty_sv = (*it).get_string().value();
+            tlBids.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
+        }
+        for (auto ask_level : data.find_field("a").get_array()) {
+            auto arr = ask_level.get_array().value();
+            auto it = arr.begin();
+            const std::string_view price_sv = (*it).get_string().value();
+            ++it;
+            const std::string_view qty_sv = (*it).get_string().value();
+            tlAsks.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
+        }
+
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
         metrics.lastEventLagMs.store(now - eventTime);
 
-        auto result = book.applyUpdate(jsonMsg, EventKind::Genuine);
+        auto result = book.applyUpdate(firstId, lastId, tlAsks, tlBids, EventKind::Genuine);
+
         if (!result.success) {
             printf("[%s] missed updates, resyncing\n", sym.c_str());
             book.clear();
-            // Mark as awaiting snapshot so the watchdog skips this symbol
-            // while runResyncWorker() is already recovering it.
             metrics.lastUpdateTimeMs.store(0, std::memory_order_relaxed);
             metrics.ofiAccumulator.store(0, std::memory_order_relaxed);
+            metrics.liveReady.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lock(bufferMutex);
                 symbolBuffers[sym].clear();
             }
             {
                 std::lock_guard<std::mutex> lock(resyncMutex);
-                resyncQueue.push(sym);  // canonical symbol in queue
+                resyncQueue.push(sym);
             }
             resyncCv.notify_one();
             return;
         }
-        auto end = std::chrono::high_resolution_clock::now();
-        long long processingUs =
-            std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-        metrics.recordProcessingUs(processingUs);
+
+        const auto end = std::chrono::high_resolution_clock::now();
+        metrics.recordProcessingUs(
+            std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
         metrics.msgCount.fetch_add(1);
         metrics.lastUpdateTimeMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
                                            std::chrono::steady_clock::now().time_since_epoch())

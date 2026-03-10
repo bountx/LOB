@@ -18,9 +18,9 @@
 #include "metrics.hpp"
 #include "metrics_server.hpp"
 #include "ofi_types.hpp"
-#include "utils/checked_arith.hpp"
 #include "order_book.hpp"
 #include "subscriber_server.hpp"
+#include "utils/checked_arith.hpp"
 
 struct ExchangeRuntime {
     std::string name;
@@ -304,8 +304,7 @@ int main(int argc, char* argv[]) {
                         long long next;
                         do {
                             next = checkedAdd(cur, ofi);
-                        } while (!acc.compare_exchange_weak(cur, next,
-                                                            std::memory_order_relaxed));
+                        } while (!acc.compare_exchange_weak(cur, next, std::memory_order_relaxed));
                     }
                 }
             });

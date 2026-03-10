@@ -120,6 +120,30 @@ UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind
     return result;
 }
 
+UpdateResult OrderBook::applyUpdate(long long firstId, long long lastId,
+                                    std::span<const std::pair<long long, long long>> asks,
+                                    std::span<const std::pair<long long, long long>> bids,
+                                    EventKind kind) {
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    if (lastId <= lastUpdateId) {
+        return {true, {}};
+    }
+    if (firstId > lastUpdateId + 1) {
+        printf("gap in update IDs, triggering resync\n");
+        return {false, {}};
+    }
+    UpdateResult result;
+    result.success = true;
+    for (const auto& [price, qty] : asks) {
+        applyLevelChange(price, qty, false, kind, result.deltas);
+    }
+    for (const auto& [price, qty] : bids) {
+        applyLevelChange(price, qty, true, kind, result.deltas);
+    }
+    lastUpdateId = lastId;
+    return result;
+}
+
 /**
  * @brief Apply a batch of bid and ask level updates and produce the resulting level deltas.
  *

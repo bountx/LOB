@@ -6,6 +6,7 @@
     "ixwebsocket",
     "nlohmann-json",
     "cpp-httplib",
+    "simdjson",
     "gtest"
   ]
 }

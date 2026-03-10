@@ -2,6 +2,7 @@
 #include <atomic>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -36,6 +37,12 @@ public:
     // Returns success=false and empty deltas if a sequence gap is detected (caller must resync).
     // kind should be Backfill during buffer replay, Genuine for live stream updates.
     UpdateResult applyUpdate(const nlohmann::json& update, EventKind kind);
+
+    // Pre-parsed hot-path overload — skips JSON parsing entirely.
+    // asks/bids contain {price, qty} pairs already scaled by 1e8.
+    UpdateResult applyUpdate(long long firstId, long long lastId,
+                             std::span<const std::pair<long long, long long>> asks,
+                             std::span<const std::pair<long long, long long>> bids, EventKind kind);
 
     // Applies bid/ask level arrays directly (no sequence checking) — used by Kraken.
     // bids/asks: JSON arrays of ["price", "qty"] string pairs; qty "0" removes the level.

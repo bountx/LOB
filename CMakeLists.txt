@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(simdjson CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ if(NOT BUILD_TESTS_ONLY)
         ixwebsocket::ixwebsocket
         nlohmann_json::nlohmann_json
         httplib::httplib
+        simdjson::simdjson
     )
 endif()
 

@@ -232,9 +232,9 @@ inline std::string buildPrometheusOutput(
                          "populated from every non-Backfill delta (including Maintenance). "
                          "Use deriv() or delta() in Grafana to obtain the per-interval rate.");
         for (const auto& [sym, m] : metricsMap) {
-            writeLine("lob_ofi_value", sym,
-                      static_cast<double>(m->ofiAccumulator.load(std::memory_order_relaxed)) /
-                          kOfiScale);
+            writeLine(
+                "lob_ofi_value", sym,
+                static_cast<double>(m->ofiAccumulator.load(std::memory_order_relaxed)) / kOfiScale);
         }
     }
 
