@@ -89,6 +89,13 @@ private:
         long long replacementQty = 0;
     };
 
+    // Shared sequencing + mutation core for both applyUpdate overloads.
+    // Must be called with orderBookMutex held.
+    UpdateResult applyUpdateCore(long long firstId, long long lastId,
+                                 std::span<const std::pair<long long, long long>> asks,
+                                 std::span<const std::pair<long long, long long>> bids,
+                                 EventKind kind);
+
     // Apply one price-level change to state + OFI view. Emits a LevelDelta into `out`.
     // Must be called with orderBookMutex held.
     void applyLevelChange(long long price, long long newQty, bool isBid, EventKind kind,

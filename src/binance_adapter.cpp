@@ -216,7 +216,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         simdjson::padded_string padded(msg->str);
         auto doc = simdParser_.iterate(padded);
 
-        std::string_view stream_sv = doc.find_field("stream").get_string().value();
+        std::string_view stream_sv = doc.find_field_unordered("stream").get_string().value();
         // Inline streamToSymbol: prefix before '@', uppercased.
         const auto at_pos = stream_sv.find('@');
         std::string binanceSym(stream_sv.substr(0, at_pos));
@@ -294,12 +294,12 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         }
 
         // --- A: live fast path — simdjson, no heap allocation, no lock ---
-        auto data = doc.find_field("data").get_object().value();
+        auto data = doc.find_field_unordered("data").get_object().value();
 
         const long long eventTime =
-            static_cast<long long>(data.find_field("E").get_int64().value());
-        const long long firstId = static_cast<long long>(data.find_field("U").get_int64().value());
-        const long long lastId = static_cast<long long>(data.find_field("u").get_int64().value());
+            static_cast<long long>(data.find_field_unordered("E").get_int64().value());
+        const long long firstId = static_cast<long long>(data.find_field_unordered("U").get_int64().value());
+        const long long lastId = static_cast<long long>(data.find_field_unordered("u").get_int64().value());
 
         // Extract bid and ask levels into thread-local pre-allocated vectors.
         // string_view elements point into `padded` which lives for the whole scope.
@@ -307,7 +307,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         tlBids.clear();
         tlAsks.clear();
 
-        for (auto bid_level : data.find_field("b").get_array()) {
+        for (auto bid_level : data.find_field_unordered("b").get_array()) {
             auto arr = bid_level.get_array().value();
             auto it = arr.begin();
             const std::string_view price_sv = (*it).get_string().value();
@@ -315,7 +315,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             const std::string_view qty_sv = (*it).get_string().value();
             tlBids.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
         }
-        for (auto ask_level : data.find_field("a").get_array()) {
+        for (auto ask_level : data.find_field_unordered("a").get_array()) {
             auto arr = ask_level.get_array().value();
             auto it = arr.begin();
             const std::string_view price_sv = (*it).get_string().value();
@@ -480,6 +480,7 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
     // Reset data-age sentinels so the watchdog doesn't fire before first snapshot.
     for (const auto& sym : symbols) {
         metricsMapRef.at(sym)->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+        metricsMapRef.at(sym)->liveReady.store(false, std::memory_order_relaxed);
     }
     lastConnectionActivityMs_.store(0, std::memory_order_relaxed);
     {

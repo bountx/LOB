@@ -83,48 +83,11 @@ void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
  *         `false` when a gap was detected. `deltas` contains emitted level and OFI membership
  * changes.
  */
-UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind) {
-    // Parse sequence IDs and all level data before acquiring the lock so that
-    // a JSON/parse exception cannot leave the live book half-mutated.
-    const long long firstId = update["U"].get<long long>();
-    const long long lastId = update["u"].get<long long>();
-    struct ParsedLevel {
-        long long price;
-        long long qty;
-        bool isBid;
-    };
-    std::vector<ParsedLevel> parsed;
-    for (const auto& ask : update["a"]) {
-        parsed.push_back({parseDecimal(ask[0].get<std::string>()),
-                          parseDecimal(ask[1].get<std::string>()), false});
-    }
-    for (const auto& bid : update["b"]) {
-        parsed.push_back({parseDecimal(bid[0].get<std::string>()),
-                          parseDecimal(bid[1].get<std::string>()), true});
-    }
-
-    std::lock_guard<std::mutex> lock(orderBookMutex);
-    if (lastId <= lastUpdateId) {
-        return {true, {}};
-    }
-    if (firstId > lastUpdateId + 1) {
-        printf("gap in update IDs, triggering resync\n");
-        return {false, {}};
-    }
-    UpdateResult result;
-    result.success = true;
-    for (const auto& lvl : parsed) {
-        applyLevelChange(lvl.price, lvl.qty, lvl.isBid, kind, result.deltas);
-    }
-    lastUpdateId = lastId;
-    return result;
-}
-
-UpdateResult OrderBook::applyUpdate(long long firstId, long long lastId,
-                                    std::span<const std::pair<long long, long long>> asks,
-                                    std::span<const std::pair<long long, long long>> bids,
-                                    EventKind kind) {
-    std::lock_guard<std::mutex> lock(orderBookMutex);
+UpdateResult OrderBook::applyUpdateCore(long long firstId, long long lastId,
+                                        std::span<const std::pair<long long, long long>> asks,
+                                        std::span<const std::pair<long long, long long>> bids,
+                                        EventKind kind) {
+    // Must be called with orderBookMutex held.
     if (lastId <= lastUpdateId) {
         return {true, {}};
     }
@@ -142,6 +105,32 @@ UpdateResult OrderBook::applyUpdate(long long firstId, long long lastId,
     }
     lastUpdateId = lastId;
     return result;
+}
+
+UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind) {
+    // Parse all data before acquiring the lock so a JSON exception cannot leave
+    // the live book half-mutated.
+    const long long firstId = update["U"].get<long long>();
+    const long long lastId = update["u"].get<long long>();
+    std::vector<std::pair<long long, long long>> asks, bids;
+    for (const auto& ask : update["a"]) {
+        asks.push_back({parseDecimal(ask[0].get<std::string>()),
+                        parseDecimal(ask[1].get<std::string>())});
+    }
+    for (const auto& bid : update["b"]) {
+        bids.push_back({parseDecimal(bid[0].get<std::string>()),
+                        parseDecimal(bid[1].get<std::string>())});
+    }
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    return applyUpdateCore(firstId, lastId, asks, bids, kind);
+}
+
+UpdateResult OrderBook::applyUpdate(long long firstId, long long lastId,
+                                    std::span<const std::pair<long long, long long>> asks,
+                                    std::span<const std::pair<long long, long long>> bids,
+                                    EventKind kind) {
+    std::lock_guard<std::mutex> lock(orderBookMutex);
+    return applyUpdateCore(firstId, lastId, asks, bids, kind);
 }
 
 /**
