@@ -236,25 +236,44 @@ TEST_F(PrometheusFormatTest, OfiValueMetricAlwaysEmitted) {
     EXPECT_NE(output.find("lob_ofi_value{"), std::string::npos);
 }
 
-TEST_F(PrometheusFormatTest, OfiValueReflectsStoredValue) {
-    // 0.5 BTC * 1e8 = 50000000; prometheus_format divides by 1e8 → expect 0.5
-    metrics["BTCUSDT"]->ofiAccumulator.store(50'000'000LL);
-    const auto output = build();
+TEST_F(PrometheusFormatTest, OfiValueAccumulatesPositiveDeltas) {
+    // +30M then +20M → net 50M scaled = 0.5 BTC
     const std::string key = "lob_ofi_value{exchange=\"testex\",symbol=\"BTCUSDT\"} ";
+    metrics["BTCUSDT"]->ofiAccumulator.fetch_add(30'000'000LL, std::memory_order_relaxed);
+    metrics["BTCUSDT"]->ofiAccumulator.fetch_add(20'000'000LL, std::memory_order_relaxed);
+    const auto output = build();
     const auto pos = output.find(key);
     ASSERT_NE(pos, std::string::npos) << "metric line not found";
-    const double val = std::stod(output.substr(pos + key.size()));
-    EXPECT_NEAR(val, 0.5, 1e-9);
+    EXPECT_NEAR(std::stod(output.substr(pos + key.size())), 0.5, 1e-9);
 }
 
-TEST_F(PrometheusFormatTest, OfiValueNegativeWhenAskPressureDominates) {
-    metrics["BTCUSDT"]->ofiAccumulator.store(-100'000'000LL);  // -1.0 BTC
-    const auto output = build();
+TEST_F(PrometheusFormatTest, OfiValueAccumulatesMixedDeltas) {
+    // -50M then +20M → net -30M scaled = -0.3 BTC
     const std::string key = "lob_ofi_value{exchange=\"testex\",symbol=\"BTCUSDT\"} ";
+    metrics["BTCUSDT"]->ofiAccumulator.fetch_add(-50'000'000LL, std::memory_order_relaxed);
+    metrics["BTCUSDT"]->ofiAccumulator.fetch_add(20'000'000LL, std::memory_order_relaxed);
+    const auto output = build();
     const auto pos = output.find(key);
     ASSERT_NE(pos, std::string::npos);
-    const double val = std::stod(output.substr(pos + key.size()));
-    EXPECT_NEAR(val, -1.0, 1e-9);
+    EXPECT_NEAR(std::stod(output.substr(pos + key.size())), -0.3, 1e-9);
+}
+
+TEST_F(PrometheusFormatTest, OfiValuePersistsAcrossScrapes) {
+    // The accumulator uses load() — it is cumulative and never cleared by build().
+    // A second scrape must export the same value as the first.
+    const std::string key = "lob_ofi_value{exchange=\"testex\",symbol=\"BTCUSDT\"} ";
+    metrics["BTCUSDT"]->ofiAccumulator.store(50'000'000LL);
+
+    const auto out1 = build();
+    const auto pos1 = out1.find(key);
+    ASSERT_NE(pos1, std::string::npos);
+    EXPECT_NEAR(std::stod(out1.substr(pos1 + key.size())), 0.5, 1e-9);
+
+    // No new deltas — second scrape must still read 0.5, not 0.
+    const auto out2 = build();
+    const auto pos2 = out2.find(key);
+    ASSERT_NE(pos2, std::string::npos);
+    EXPECT_NEAR(std::stod(out2.substr(pos2 + key.size())), 0.5, 1e-9);
 }
 
 TEST_F(PrometheusFormatTest, OfiHelpAndTypeHeadersPresent) {

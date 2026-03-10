@@ -135,7 +135,7 @@ inline std::string buildPrometheusOutput(
         for (const auto& [sym, m] : metricsMap) {
             const long long last = m->lastUpdateTimeMs.load();
             if (last == 0) continue;  // no data yet / reconnecting
-            const double age = std::max(0.0, (scrapeNowMs - last) / 1000.0);
+            const double age = std::max(0.0, static_cast<double>(scrapeNowMs - last) / 1000.0);
             ageLines.emplace_back(sym, age);
         }
         if (!ageLines.empty()) {
@@ -157,7 +157,13 @@ inline std::string buildPrometheusOutput(
         const std::string exch = escapeLabelValue(exchange);
         const std::string symEsc = escapeLabelValue(sym);
         // Build the shared label prefix (without closing brace).
-        const std::string base = "{exchange=\"" + exch + "\",symbol=\"" + symEsc + "\"";
+        std::string base;
+        base.reserve(12 + exch.size() + 10 + symEsc.size() + 1);
+        base += "{exchange=\"";
+        base += exch;
+        base += "\",symbol=\"";
+        base += symEsc;
+        base += "\"";
         for (int i = 0; i < 10; ++i) {
             ss << "lob_processing_time_microseconds_bucket" << base << ",le=\""
                << Metrics::kBucketBounds[i] << "\"} " << m->processingBuckets[i].load() << "\n";
