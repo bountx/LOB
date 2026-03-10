@@ -72,14 +72,25 @@ private:
     std::vector<Level> ofiBids;
     std::vector<Level> ofiAsks;
 
+    // Returned by updateOfiView to describe secondary OFI-view structural changes.
+    // Avoids diffing view snapshots: updateOfiView knows exactly what it evicted/added.
+    // A zero price means no change occurred on that slot.
+    struct ViewChangeResult {
+        long long evictedPrice = 0;
+        long long evictedQty = 0;
+        long long replacementPrice = 0;
+        long long replacementQty = 0;
+    };
+
     // Apply one price-level change to state + OFI view. Emits a LevelDelta into `out`.
     // Must be called with orderBookMutex held.
     void applyLevelChange(long long price, long long newQty, bool isBid, EventKind kind,
                           std::vector<LevelDelta>& out);
 
     // Update OFI view for one side after a level change.
+    // Returns a ViewChangeResult describing any eviction or replacement that occurred.
     // Must be called with orderBookMutex held.
-    void updateOfiView(long long price, long long newQty, bool isBid);
+    ViewChangeResult updateOfiView(long long price, long long newQty, bool isBid);
 
     // Full rebuild of one OFI view side from the state map (O(N log M)).
     // Called when a level is removed from the view and a replacement must be found.

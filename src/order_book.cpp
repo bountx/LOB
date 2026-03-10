@@ -179,7 +179,9 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
     auto& state = isBid ? bidState : askState;
     long long prevQty = 0;
     auto it = state.find(price);
-    if (it != state.end()) prevQty = it->second;
+    if (it != state.end()) {
+        prevQty = it->second;
+    }
 
     if (newQty == 0) {
         state.erase(price);
@@ -188,75 +190,46 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
     }
 
     const long long delta = newQty - prevQty;
-    if (delta == 0) return;
+    if (delta == 0) {
+        return;
+    }
 
-    // Snapshot the OFI view before the update to detect secondary changes
-    // (evictions when a new level enters a full view, replacements after a removal).
-    const std::vector<Level> viewBefore = isBid ? ofiBids : ofiAsks;
+    // Check view membership directly (no copy) before mutating the view.
+    const std::vector<Level>& viewRef = isBid ? ofiBids : ofiAsks;
+    const bool wasInView = std::any_of(viewRef.begin(), viewRef.end(),
+                                       [price](const Level& l) { return l.first == price; });
 
-    auto inView = [price](const std::vector<Level>& v) -> bool {
-        return std::any_of(v.begin(), v.end(),
-                           [price](const Level& l) { return l.first == price; });
-    };
-    const bool wasInView = inView(viewBefore);
+    // updateOfiView reports any structural change it makes (eviction / replacement)
+    // so we never need a before-snapshot or post-diff.
+    const ViewChangeResult viewChange = updateOfiView(price, newQty, isBid);
 
-    updateOfiView(price, newQty, isBid);
+    const bool nowInView = std::any_of(viewRef.begin(), viewRef.end(),
+                                       [price](const Level& l) { return l.first == price; });
 
-    const std::vector<Level>& viewAfter = isBid ? ofiBids : ofiAsks;
-    const bool nowInView = inView(viewAfter);
-
-    // Emit the direct delta for the updated price.
     out.push_back(LevelDelta{price, newQty, delta, isBid, wasInView, nowInView, kind});
 
-    // Emit secondary deltas for any other levels whose view membership changed.
-    // deltaQty is the OFI view-contribution change (not a state change):
-    //   eviction:    deltaQty = -lvlQty  (view qty dropped from lvlQty to 0)
-    //   replacement: deltaQty = +lvlQty  (view qty grew from 0 to lvlQty)
-    // The kind is propagated from the triggering update: Backfill-phase updates
-    // produce Backfill-tagged secondaries; Genuine-phase updates produce Maintenance.
+    // Secondary deltas for OFI-view structural changes caused by this update.
+    // deltaQty is the view-contribution change (not a state change):
+    //   eviction:    -evictedQty  (view qty dropped from evictedQty to 0)
+    //   replacement: +replacementQty  (view qty grew from 0 to replacementQty)
+    // Propagate the phase kind: Backfill → Backfill; Genuine → Maintenance.
     const EventKind secondaryKind =
         (kind == EventKind::Backfill) ? EventKind::Backfill : EventKind::Maintenance;
 
-    // Evictions: present in viewBefore but absent in viewAfter (excluding updated price).
-    for (const auto& [lvlPrice, lvlQty] : viewBefore) {
-        if (lvlPrice == price) continue;
-        const bool stillIn =
-            std::any_of(viewAfter.begin(), viewAfter.end(),
-                        [lvlPrice](const Level& l) { return l.first == lvlPrice; });
-        if (!stillIn) {
-            out.push_back(LevelDelta{lvlPrice, lvlQty, -lvlQty, isBid, true, false, secondaryKind});
-        }
+    if (viewChange.evictedPrice != 0) {
+        const long long q = viewChange.evictedQty;
+        out.push_back(LevelDelta{viewChange.evictedPrice, q, -q, isBid, true, false, secondaryKind});
     }
-
-    // Replacements: present in viewAfter but absent in viewBefore (excluding updated price).
-    for (const auto& [lvlPrice, lvlQty] : viewAfter) {
-        if (lvlPrice == price) continue;
-        const bool wasIn = std::any_of(viewBefore.begin(), viewBefore.end(),
-                                       [lvlPrice](const Level& l) { return l.first == lvlPrice; });
-        if (!wasIn) {
-            out.push_back(LevelDelta{lvlPrice, lvlQty, lvlQty, isBid, false, true, secondaryKind});
-        }
+    if (viewChange.replacementPrice != 0) {
+        const long long q = viewChange.replacementQty;
+        out.push_back(
+            LevelDelta{viewChange.replacementPrice, q, q, isBid, false, true, secondaryKind});
     }
 }
 
-/**
- * @brief Update the OFI (top-of-book) view for a single price level on the specified side.
- *
- * Adjusts the OFI view for bids or asks to reflect the new quantity at `price`, enforcing
- * the configured view depth and maintaining price ordering. If `newQty` is zero the level
- * is removed from the view (and the view will be replenished if necessary). If `newQty`
- * is positive the level is either inserted or updated; an insertion occurs only when the
- * view has available space or the price is better than the current worst entry, and the
- * view will be trimmed if it exceeds the configured depth.
- *
- * For bids the OFI view is kept in descending price order (best/biggest price at front).
- * For asks the OFI view is kept in ascending price order (best/smallest price at front).
- *
- * @param price Price level expressed in internal integer (scaled) units.
- * @param newQty Quantity at the price level in internal integer units; use `0` to remove the level.
- * @param isBid `true` to update the bids OFI view, `false` to update the asks OFI view.
- */
-void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {
+OrderBook::ViewChangeResult OrderBook::updateOfiView(long long price, long long newQty,
+                                                    bool isBid) {
+    ViewChangeResult result;
     if (isBid) {
         // ofiBids sorted descending: front = best bid, back = worst bid in view.
         auto it = std::lower_bound(ofiBids.begin(), ofiBids.end(), price,
@@ -265,8 +238,15 @@ void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {
 
         if (inView) {
             if (newQty == 0) {
+                const bool wasFull = (ofiBids.size() == ofiDepth);
                 ofiBids.erase(it);
                 rebuildOfiSide(true);
+                // If the view was full and rebuild refilled it, the new last element is
+                // the replacement that entered from state.
+                if (wasFull && ofiBids.size() == ofiDepth) {
+                    result.replacementPrice = ofiBids.back().first;
+                    result.replacementQty = ofiBids.back().second;
+                }
             } else {
                 it->second = newQty;
             }
@@ -276,6 +256,9 @@ void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {
             if (viewNotFull || beatWorst) {
                 ofiBids.insert(it, {price, newQty});
                 if (ofiBids.size() > ofiDepth) {
+                    // Capture the evicted worst level before removing it.
+                    result.evictedPrice = ofiBids.back().first;
+                    result.evictedQty = ofiBids.back().second;
                     ofiBids.pop_back();
                 }
             }
@@ -288,8 +271,13 @@ void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {
 
         if (inView) {
             if (newQty == 0) {
+                const bool wasFull = (ofiAsks.size() == ofiDepth);
                 ofiAsks.erase(it);
                 rebuildOfiSide(false);
+                if (wasFull && ofiAsks.size() == ofiDepth) {
+                    result.replacementPrice = ofiAsks.back().first;
+                    result.replacementQty = ofiAsks.back().second;
+                }
             } else {
                 it->second = newQty;
             }
@@ -299,11 +287,14 @@ void OrderBook::updateOfiView(long long price, long long newQty, bool isBid) {
             if (viewNotFull || beatWorst) {
                 ofiAsks.insert(it, {price, newQty});
                 if (ofiAsks.size() > ofiDepth) {
+                    result.evictedPrice = ofiAsks.back().first;
+                    result.evictedQty = ofiAsks.back().second;
                     ofiAsks.pop_back();
                 }
             }
         }
     }
+    return result;
 }
 
 /**
