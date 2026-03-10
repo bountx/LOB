@@ -238,7 +238,7 @@ TEST_F(PrometheusFormatTest, OfiValueMetricAlwaysEmitted) {
 
 TEST_F(PrometheusFormatTest, OfiValueReflectsStoredValue) {
     // 0.5 BTC * 1e8 = 50000000; prometheus_format divides by 1e8 → expect 0.5
-    metrics["BTCUSDT"]->lastOfiValue.store(50'000'000LL);
+    metrics["BTCUSDT"]->ofiAccumulator.store(50'000'000LL);
     const auto output = build();
     const std::string key = "lob_ofi_value{exchange=\"testex\",symbol=\"BTCUSDT\"} ";
     const auto pos = output.find(key);
@@ -248,7 +248,7 @@ TEST_F(PrometheusFormatTest, OfiValueReflectsStoredValue) {
 }
 
 TEST_F(PrometheusFormatTest, OfiValueNegativeWhenAskPressureDominates) {
-    metrics["BTCUSDT"]->lastOfiValue.store(-100'000'000LL);  // -1.0 BTC
+    metrics["BTCUSDT"]->ofiAccumulator.store(-100'000'000LL);  // -1.0 BTC
     const auto output = build();
     const std::string key = "lob_ofi_value{exchange=\"testex\",symbol=\"BTCUSDT\"} ";
     const auto pos = output.find(key);
