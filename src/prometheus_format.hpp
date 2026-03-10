@@ -135,7 +135,7 @@ inline std::string buildPrometheusOutput(
         for (const auto& [sym, m] : metricsMap) {
             const long long last = m->lastUpdateTimeMs.load();
             if (last == 0) continue;  // no data yet / reconnecting
-            const double age = std::max(0.0, (scrapeNowMs - last) / 1000.0);
+            const double age = std::max(0.0, static_cast<double>(scrapeNowMs - last) / 1000.0);
             ageLines.emplace_back(sym, age);
         }
         if (!ageLines.empty()) {
@@ -157,7 +157,13 @@ inline std::string buildPrometheusOutput(
         const std::string exch = escapeLabelValue(exchange);
         const std::string symEsc = escapeLabelValue(sym);
         // Build the shared label prefix (without closing brace).
-        const std::string base = "{exchange=\"" + exch + "\",symbol=\"" + symEsc + "\"";
+        std::string base;
+        base.reserve(12 + exch.size() + 10 + symEsc.size() + 1);
+        base += "{exchange=\"";
+        base += exch;
+        base += "\",symbol=\"";
+        base += symEsc;
+        base += "\"";
         for (int i = 0; i < 10; ++i) {
             ss << "lob_processing_time_microseconds_bucket" << base << ",le=\""
                << Metrics::kBucketBounds[i] << "\"} " << m->processingBuckets[i].load() << "\n";
@@ -221,12 +227,14 @@ inline std::string buildPrometheusOutput(
         // OFI: divide by 1e8 to express in native quantity units (e.g. BTC).
         constexpr double kOfiScale = 100'000'000.0;
         writeGaugeHeader("lob_ofi_value",
-                         "Order Flow Imbalance of the most recent update: sum of bid quantity "
-                         "changes minus ask quantity changes across the top OFI view levels "
-                         "(Genuine events only)");
+                         "Cumulative Order Flow Imbalance since process start: sum of bid quantity "
+                         "changes minus ask quantity changes across the top OFI view levels, "
+                         "populated from every non-Backfill delta (including Maintenance). "
+                         "Use deriv() or delta() in Grafana to obtain the per-interval rate.");
         for (const auto& [sym, m] : metricsMap) {
             writeLine("lob_ofi_value", sym,
-                      static_cast<double>(m->lastOfiValue.load()) / kOfiScale);
+                      static_cast<double>(m->ofiAccumulator.load(std::memory_order_relaxed)) /
+                          kOfiScale);
         }
     }
 
