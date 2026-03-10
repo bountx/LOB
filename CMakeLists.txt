@@ -10,7 +10,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(simdjson CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
@@ -22,6 +21,7 @@ option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 if(NOT BUILD_TESTS_ONLY)
     find_package(ixwebsocket CONFIG REQUIRED)
     find_package(httplib CONFIG REQUIRED)
+    find_package(simdjson CONFIG REQUIRED)
 
     # Tell CMake to build an executable named 'lob_app' from your main.cpp
     add_executable(lob_app
