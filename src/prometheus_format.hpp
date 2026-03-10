@@ -217,6 +217,19 @@ inline std::string buildPrometheusOutput(
         }
     }
 
+    {
+        // OFI: divide by 1e8 to express in native quantity units (e.g. BTC).
+        constexpr double kOfiScale = 100'000'000.0;
+        writeGaugeHeader("lob_ofi_value",
+                         "Order Flow Imbalance of the most recent update: sum of bid quantity "
+                         "changes minus ask quantity changes across the top OFI view levels "
+                         "(Genuine events only)");
+        for (const auto& [sym, m] : metricsMap) {
+            writeLine("lob_ofi_value", sym,
+                      static_cast<double>(m->lastOfiValue.load()) / kOfiScale);
+        }
+    }
+
     // Process-level memory — emitted only on the first view to avoid duplication.
     if (emitHeaders) {
         if (const auto rss = readRssBytes()) {

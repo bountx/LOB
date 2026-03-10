@@ -63,13 +63,13 @@ void KrakenAdapter::handleBookSnapshot(const nlohmann::json& data) {
 }
 
 /**
- * @brief Apply a Kraken incremental book update for one symbol.
+ * @brief Apply an incremental order book update from Kraken for a single symbol.
  *
- * Converts the Kraken bid/ask level arrays to string pairs and calls
- * OrderBook::applyDelta. Records processing time, event lag, and fires
- * the update callback.
+ * Processes the provided Kraken update payload for its symbol, updates the corresponding OrderBook and Metrics,
+ * records processing time and event lag, increments message counters, and invokes the registered update callback
+ * with the computed deltas and the event timestamp.
  *
- * @param data One element of the "data" array from a Kraken book update message.
+ * @param data JSON object representing one entry from Kraken's "data" array in a book update message.
  */
 void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
     const std::string krakenSym = data["symbol"].get<std::string>();
@@ -94,7 +94,7 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
 
     auto bids = kraken::levelsToStringPairs(data["bids"]);
     auto asks = kraken::levelsToStringPairs(data["asks"]);
-    book.applyDelta(bids, asks);
+    auto deltas = book.applyDelta(bids, asks, EventKind::Genuine);
 
     // Event lag: Kraken update timestamp is ISO 8601 in "timestamp" field.
     long long eventMs = 0;
@@ -119,7 +119,7 @@ void KrakenAdapter::handleBookUpdate(const nlohmann::json& data) {
                                    std::memory_order_relaxed);
 
     if (updateCallback_) {
-        updateCallback_(exchangeName(), *canonical, bids, asks, eventMs);
+        updateCallback_(exchangeName(), *canonical, deltas, eventMs);
     }
 }
 

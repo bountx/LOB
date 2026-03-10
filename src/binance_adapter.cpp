@@ -53,20 +53,18 @@ void BinanceAdapter::stop() {
 }
 
 /**
- * @brief Fetches a depth snapshot for a symbol from Binance and applies it to the given order book.
+ * @brief Fetches a REST order-book snapshot from Binance for a symbol and applies it to an OrderBook.
  *
- * Attempts to download the REST order-book snapshot for `symbol`, apply it to `orderBook`, and then
- * replay any pre-snapshot buffered websocket updates for that symbol atomically. If the HTTP
- * response indicates rate limiting or an IP ban the function will wait according to the server's
- * guidance (or a default) and return `false`.
+ * Attempts to download the snapshot for binanceSym, apply it to orderBook, and then replay any
+ * pre-snapshot buffered websocket updates for the same canonical symbol atomically. If the HTTP
+ * response indicates rate limiting or an IP ban the function waits (respecting stoken) for the
+ * server-recommended or a default interval and returns `false`.
  *
- * @param symbol Symbol identifier used in the Binance REST request (e.g., "BTCUSDT").
- * @param orderBook OrderBook instance to receive the applied snapshot and subsequent replayed
- * updates.
- * @param stoken Stop token used to interrupt any waits caused by rate limiting or IP bans, allowing
- * for graceful shutdown.
- * @return `true` if the snapshot was applied and all buffered updates were successfully replayed;
- * `false` otherwise.
+ * @param binanceSym Binance-format symbol used in the REST request (e.g., "BTCUSDT").
+ * @param canonical Canonical/internal symbol corresponding to binanceSym (used for buffering/logs).
+ * @param orderBook OrderBook instance that will receive the snapshot and replayed updates.
+ * @param stoken Stop token that interrupts waits caused by rate limiting or IP ban handling.
+ * @return `true` if the snapshot was applied and all buffered updates were successfully replayed; `false` otherwise.
  */
 bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
                                            const std::string& canonical, OrderBook& orderBook,
@@ -114,7 +112,7 @@ bool BinanceAdapter::fetchAndApplySnapshot(const std::string& binanceSym,
         std::lock_guard<std::mutex> lock(bufferMutex);
         orderBook.applySnapshot(snapshot);
         for (const auto& msg : symbolBuffers[canonical]) {
-            if (!orderBook.applyUpdate(msg)) {
+            if (!orderBook.applyUpdate(msg, EventKind::Backfill).success) {
                 fprintf(stderr, "[%s] buffered message out of order, resyncing\n",
                         canonical.c_str());
                 symbolBuffers[canonical].clear();
@@ -176,8 +174,10 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
         }
         for (const auto& sym : subscribedSymbols_) {
             auto mit = metricsMap->find(sym);
-            if (mit != metricsMap->end())
+            if (mit != metricsMap->end()) {
                 mit->second->lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+                mit->second->lastOfiValue.store(0, std::memory_order_relaxed);
+            }
         }
         {
             std::lock_guard<std::mutex> lock(resyncMutex);
@@ -240,12 +240,14 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
                             .count();
         metrics.lastEventLagMs.store(now - eventTime);
 
-        if (!book.applyUpdate(jsonMsg)) {
+        auto result = book.applyUpdate(jsonMsg, EventKind::Genuine);
+        if (!result.success) {
             printf("[%s] missed updates, resyncing\n", sym.c_str());
             book.clear();
             // Mark as awaiting snapshot so the watchdog skips this symbol
             // while runResyncWorker() is already recovering it.
             metrics.lastUpdateTimeMs.store(0, std::memory_order_relaxed);
+            metrics.lastOfiValue.store(0, std::memory_order_relaxed);
             {
                 std::lock_guard<std::mutex> lock(bufferMutex);
                 symbolBuffers[sym].clear();
@@ -268,7 +270,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
                                        std::memory_order_relaxed);
 
         if (updateCallback_) {
-            updateCallback_(exchangeName(), sym, jsonMsg["b"], jsonMsg["a"], eventTime);
+            updateCallback_(exchangeName(), sym, result.deltas, eventTime);
         }
     } catch (const std::exception& ex) {
         printf("message error: %s\n", ex.what());

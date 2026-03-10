@@ -228,6 +228,41 @@ TEST_F(PrometheusFormatTest, DataAgeSkipsZeroSentinelSymbolsInMultiSymbol) {
               std::string::npos);
 }
 
+// ─── OFI metric ───────────────────────────────────────────────────────────────
+
+TEST_F(PrometheusFormatTest, OfiValueMetricAlwaysEmitted) {
+    // lob_ofi_value is a gauge; the labeled data sample must be present even at zero.
+    const auto output = build();
+    EXPECT_NE(output.find("lob_ofi_value{"), std::string::npos);
+}
+
+TEST_F(PrometheusFormatTest, OfiValueReflectsStoredValue) {
+    // 0.5 BTC * 1e8 = 50000000; prometheus_format divides by 1e8 → expect 0.5
+    metrics["BTCUSDT"]->lastOfiValue.store(50'000'000LL);
+    const auto output = build();
+    const std::string key = "lob_ofi_value{exchange=\"testex\",symbol=\"BTCUSDT\"} ";
+    const auto pos = output.find(key);
+    ASSERT_NE(pos, std::string::npos) << "metric line not found";
+    const double val = std::stod(output.substr(pos + key.size()));
+    EXPECT_NEAR(val, 0.5, 1e-9);
+}
+
+TEST_F(PrometheusFormatTest, OfiValueNegativeWhenAskPressureDominates) {
+    metrics["BTCUSDT"]->lastOfiValue.store(-100'000'000LL);  // -1.0 BTC
+    const auto output = build();
+    const std::string key = "lob_ofi_value{exchange=\"testex\",symbol=\"BTCUSDT\"} ";
+    const auto pos = output.find(key);
+    ASSERT_NE(pos, std::string::npos);
+    const double val = std::stod(output.substr(pos + key.size()));
+    EXPECT_NEAR(val, -1.0, 1e-9);
+}
+
+TEST_F(PrometheusFormatTest, OfiHelpAndTypeHeadersPresent) {
+    const auto output = build();
+    EXPECT_NE(output.find("# HELP lob_ofi_value"), std::string::npos);
+    EXPECT_NE(output.find("# TYPE lob_ofi_value gauge"), std::string::npos);
+}
+
 // HELP/TYPE headers must appear once when at least one symbol has data.
 TEST_F(PrometheusFormatTest, DataAgeHeadersPresentWhenDataExists) {
     const long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
