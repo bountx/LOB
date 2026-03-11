@@ -159,7 +159,7 @@ long long PriceLadder::prevBelow(long long below) const {
     if (offset <= 0) {
         return 0;
     }
-    int startIdx = static_cast<int>(offset / tickSize) - 1;
+    int startIdx = static_cast<int>((offset - 1) / tickSize);
     startIdx = std::min(startIdx, size - 1);
     for (int i = startIdx; i >= 0; --i) {
         if (qtys[i] > 0) {
