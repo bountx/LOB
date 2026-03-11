@@ -33,8 +33,17 @@ void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
     lastUpdateId = newLastUpdateId;
     bidLadder.clear();
     askLadder.clear();
-    for (const auto& [p, q] : newBids) bidLadder.set(p, q);
-    for (const auto& [p, q] : newAsks) askLadder.set(p, q);
+    // Skip levels outside the ladder window to avoid cascade recentering that
+    // wipes previously loaded levels.  Binance snapshots can include levels
+    // $10 000+ from mid; the ladder only needs levels within ±halfRange ticks
+    // for correct OFI tracking.  The first level establishes the centre; all
+    // subsequent levels outside the resulting window are silently dropped.
+    for (const auto& [p, q] : newBids) {
+        if (bidLadder.inRange(p) || !bidLadder.activeCount()) bidLadder.set(p, q);
+    }
+    for (const auto& [p, q] : newAsks) {
+        if (askLadder.inRange(p) || !askLadder.activeCount()) askLadder.set(p, q);
+    }
     ofiBids.clear();
     ofiAsks.clear();
     rebuildOfiSide(true);
