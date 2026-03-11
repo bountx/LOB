@@ -2,13 +2,20 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
+#include <stdexcept>
 
-PriceLadder::PriceLadder(long long tickSizeArg, int halfRangeArg)
-    : tickSize(tickSizeArg),
-      halfRange(halfRangeArg),
-      size((halfRangeArg * 2) + 1),
-      bestLowIdx((halfRangeArg * 2) + 1) {
-    qtys = std::make_unique<long long[]>(size);
+PriceLadder::PriceLadder(long long tickSizeArg, int halfRangeArg) {
+    if (tickSizeArg <= 0) {
+        throw std::invalid_argument("PriceLadder: tickSizeArg must be positive");
+    }
+    if (halfRangeArg < 0 || halfRangeArg > (std::numeric_limits<int>::max() - 1) / 2) {
+        throw std::invalid_argument("PriceLadder: halfRangeArg out of range");
+    }
+    tickSize  = tickSizeArg;
+    halfRange = halfRangeArg;
+    size      = (halfRangeArg * 2) + 1;
+    qtys      = std::make_unique<long long[]>(static_cast<std::size_t>(size));
     std::memset(qtys.get(), 0, static_cast<std::size_t>(size) * sizeof(long long));
 }
 
@@ -39,13 +46,13 @@ void PriceLadder::initCenter(long long price) {
 
 void PriceLadder::rebuildBestIndices() {
     bestHighIdx = -1;
-    bestLowIdx = size;
+    bestLowIdx  = -1;
     count = 0;
     for (int i = 0; i < size; ++i) {
         if (qtys[i] > 0) {
             ++count;
             bestHighIdx = std::max(bestHighIdx, i);
-            bestLowIdx = std::min(bestLowIdx, i);
+            if (bestLowIdx < 0) { bestLowIdx = i; }  // ascending scan: first found is lowest
         }
     }
 }
@@ -100,12 +107,14 @@ void PriceLadder::set(long long price, long long qty) {
     }
 
     // Maintain bestLowIdx.
-    if (qty > 0 && idx < bestLowIdx) {
+    if (qty > 0 && (bestLowIdx < 0 || idx < bestLowIdx)) {
         bestLowIdx = idx;
     } else if (qty == 0 && idx == bestLowIdx) {
+        ++bestLowIdx;
         while (bestLowIdx < size && qtys[bestLowIdx] == 0) {
             ++bestLowIdx;
         }
+        if (bestLowIdx >= size) { bestLowIdx = -1; }
     }
 }
 
@@ -122,7 +131,7 @@ void PriceLadder::clear() {
     }
     count = 0;
     bestHighIdx = -1;
-    bestLowIdx = size;
+    bestLowIdx  = -1;
     initialized = false;
 }
 
@@ -134,7 +143,7 @@ long long PriceLadder::bestHigh() const {
 }
 
 long long PriceLadder::bestLow() const {
-    if (bestLowIdx >= size) {
+    if (bestLowIdx < 0) {
         return 0;
     }
     return toPrice(bestLowIdx);
@@ -159,7 +168,7 @@ long long PriceLadder::prevBelow(long long below) const {
 }
 
 long long PriceLadder::nextAbove(long long above) const {
-    if (!initialized || bestLowIdx >= size) {
+    if (!initialized || bestLowIdx < 0) {
         return 0;
     }
     const long long offset = above - basePrice;

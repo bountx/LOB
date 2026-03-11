@@ -66,7 +66,7 @@ private:
     std::size_t count = 0;
 
     int bestHighIdx = -1;  // highest index with qty > 0; -1 when empty
-    int bestLowIdx;        // lowest  index with qty > 0; size when empty
+    int bestLowIdx  = -1;  // lowest  index with qty > 0; -1 when empty
 
     int toIdx(long long price) const noexcept;
     long long toPrice(int idx) const noexcept;
