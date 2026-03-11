@@ -298,8 +298,10 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
 
         const long long eventTime =
             static_cast<long long>(data.find_field_unordered("E").get_int64().value());
-        const long long firstId = static_cast<long long>(data.find_field_unordered("U").get_int64().value());
-        const long long lastId = static_cast<long long>(data.find_field_unordered("u").get_int64().value());
+        const long long firstId =
+            static_cast<long long>(data.find_field_unordered("U").get_int64().value());
+        const long long lastId =
+            static_cast<long long>(data.find_field_unordered("u").get_int64().value());
 
         // Extract bid and ask levels into thread-local pre-allocated vectors.
         // string_view elements point into `padded` which lives for the whole scope.
@@ -312,7 +314,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             auto it = arr.begin();
             if (it == arr.end()) continue;  // skip malformed
             const std::string_view price_sv = (*it).get_string().value();
-            +it;
+            ++it;
             if (it == arr.end()) continue;  // skip malformed
             const std::string_view qty_sv = (*it).get_string().value();
             tlBids.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
@@ -322,7 +324,7 @@ void BinanceAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
             auto it = arr.begin();
             if (it == arr.end()) continue;  // skip malformed
             const std::string_view price_sv = (*it).get_string().value();
-            +it;
+            ++it;
             if (it == arr.end()) continue;  // skip malformed
             const std::string_view qty_sv = (*it).get_string().value();
             tlAsks.push_back({parseDecimal(price_sv), parseDecimal(qty_sv)});
@@ -443,11 +445,14 @@ void BinanceAdapter::runResyncWorker(int maxSnapshotRetries, std::stop_token sto
  * fetches and applies each symbol's initial REST order book snapshot with retry and backoff.
  *
  * @param symbols List of canonical symbol names to subscribe (e.g., "BTC-USDT").
- * @param booksRef Map from canonical symbol to owned OrderBook instances; must contain every entry in `symbols`.
- * @param metricsMapRef Map from canonical symbol to owned Metrics instances; must contain every entry in `symbols`.
+ * @param booksRef Map from canonical symbol to owned OrderBook instances; must contain every entry
+ * in `symbols`.
+ * @param metricsMapRef Map from canonical symbol to owned Metrics instances; must contain every
+ * entry in `symbols`.
  * @param snapshotDepthArg Depth to request for each REST order book snapshot.
  * @param maxSnapshotRetries Maximum attempts to fetch and apply each initial snapshot.
- * @return true if the WebSocket connected and all initial snapshots were successfully applied; `false` if validation failed, the WebSocket failed to connect, or any snapshot failed.
+ * @return true if the WebSocket connected and all initial snapshots were successfully applied;
+ * `false` if validation failed, the WebSocket failed to connect, or any snapshot failed.
  */
 bool BinanceAdapter::start(const std::vector<std::string>& symbols,
                            std::unordered_map<std::string, std::unique_ptr<OrderBook>>& booksRef,

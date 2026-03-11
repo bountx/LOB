@@ -80,10 +80,13 @@ void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
  *
  * @param firstId First sequence id of the incoming update range.
  * @param lastId Last sequence id of the incoming update range.
- * @param asks Span of (price, quantity) pairs representing ask-level updates; values are stored as internal scaled integers.
- * @param bids Span of (price, quantity) pairs representing bid-level updates; values are stored as internal scaled integers.
+ * @param asks Span of (price, quantity) pairs representing ask-level updates; values are stored as
+ * internal scaled integers.
+ * @param bids Span of (price, quantity) pairs representing bid-level updates; values are stored as
+ * internal scaled integers.
  * @param kind Event kind that categorizes emitted deltas (e.g., Maintenance or Backfill).
- * @return UpdateResult `success` is `true` when the update was applied (or already applied), `false` when a gap was detected. `deltas` contains emitted LevelDelta entries.
+ * @return UpdateResult `success` is `true` when the update was applied (or already applied),
+ * `false` when a gap was detected. `deltas` contains emitted LevelDelta entries.
  */
 UpdateResult OrderBook::applyUpdateCore(long long firstId, long long lastId,
                                         std::span<const std::pair<long long, long long>> asks,
@@ -125,7 +128,7 @@ UpdateResult OrderBook::applyUpdateCore(long long firstId, long long lastId,
  * @param kind   Event kind to attribute to resulting level deltas.
  * @return UpdateResult Result describing whether the update was applied and any
  *                      generated level deltas; indicates failure when the
- *                      update is out-of-order or a gap is detected. 
+ *                      update is out-of-order or a gap is detected.
  */
 UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind) {
     // Parse all data before acquiring the lock so a JSON exception cannot leave
@@ -134,12 +137,12 @@ UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind
     const long long lastId = update["u"].get<long long>();
     std::vector<std::pair<long long, long long>> asks, bids;
     for (const auto& ask : update["a"]) {
-        asks.push_back({parseDecimal(ask[0].get<std::string>()),
-                        parseDecimal(ask[1].get<std::string>())});
+        asks.push_back(
+            {parseDecimal(ask[0].get<std::string>()), parseDecimal(ask[1].get<std::string>())});
     }
     for (const auto& bid : update["b"]) {
-        bids.push_back({parseDecimal(bid[0].get<std::string>()),
-                        parseDecimal(bid[1].get<std::string>())});
+        bids.push_back(
+            {parseDecimal(bid[0].get<std::string>()), parseDecimal(bid[1].get<std::string>())});
     }
     std::lock_guard<std::mutex> lock(orderBookMutex);
     return applyUpdateCore(firstId, lastId, asks, bids, kind);
@@ -153,11 +156,14 @@ UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind
  *
  * @param firstId First update identifier in the incoming update sequence.
  * @param lastId Last update identifier in the incoming update sequence.
- * @param asks Span of ask levels as (price, quantity) pairs; both values are stored as integers using kPriceScale.
- * @param bids Span of bid levels as (price, quantity) pairs; both values are stored as integers using kPriceScale.
+ * @param asks Span of ask levels as (price, quantity) pairs; both values are stored as integers
+ * using kPriceScale.
+ * @param bids Span of bid levels as (price, quantity) pairs; both values are stored as integers
+ * using kPriceScale.
  * @param kind EventKind that classifies the origin of the update (affects how deltas are labeled).
- * @return UpdateResult Result describing whether the update was applied and the list of produced LevelDelta entries.
- *         On detection of a gap (missing updates) the result indicates failure and contains no deltas.
+ * @return UpdateResult Result describing whether the update was applied and the list of produced
+ * LevelDelta entries. On detection of a gap (missing updates) the result indicates failure and
+ * contains no deltas.
  */
 UpdateResult OrderBook::applyUpdate(long long firstId, long long lastId,
                                     std::span<const std::pair<long long, long long>> asks,
@@ -295,9 +301,22 @@ OrderBook::ViewChangeResult OrderBook::updateOfiView(long long price, long long 
             if (newQty == 0) {
                 const bool wasFull = (ofiBids.size() == ofiDepth);
                 ofiBids.erase(it);
-                rebuildOfiSide(true);
-                // If the view was full and rebuild refilled it, the new last element is
-                // the replacement that entered from state.
+                // Find the single replacement: max bid price strictly below the new worst-in-view.
+                // O(N) scan, no allocation. The replacement always belongs at push_back()
+                // because it's worse than every price currently in the view.
+                // When ofiBids is empty any bid qualifies (no upper bound).
+                const bool hasWorst = !ofiBids.empty();
+                const long long worstInView = hasWorst ? ofiBids.back().first : 0;
+                long long repPrice = 0, repQty = 0;
+                for (const auto& [p, q] : bidState) {
+                    if ((!hasWorst || p < worstInView) && p > repPrice) {
+                        repPrice = p;
+                        repQty = q;
+                    }
+                }
+                if (repPrice != 0) {
+                    ofiBids.push_back({repPrice, repQty});
+                }
                 if (wasFull && ofiBids.size() == ofiDepth) {
                     result.replacementPrice = ofiBids.back().first;
                     result.replacementQty = ofiBids.back().second;
@@ -328,7 +347,20 @@ OrderBook::ViewChangeResult OrderBook::updateOfiView(long long price, long long 
             if (newQty == 0) {
                 const bool wasFull = (ofiAsks.size() == ofiDepth);
                 ofiAsks.erase(it);
-                rebuildOfiSide(false);
+                // Find the single replacement: min ask price strictly above the new worst-in-view.
+                // O(N) scan, no allocation. The replacement always belongs at push_back()
+                // because it's worse than every price currently in the view.
+                const long long threshold = ofiAsks.empty() ? 0 : ofiAsks.back().first;
+                long long repPrice = 0, repQty = 0;
+                for (const auto& [p, q] : askState) {
+                    if (p > threshold && (repPrice == 0 || p < repPrice)) {
+                        repPrice = p;
+                        repQty = q;
+                    }
+                }
+                if (repPrice != 0) {
+                    ofiAsks.push_back({repPrice, repQty});
+                }
                 if (wasFull && ofiAsks.size() == ofiDepth) {
                     result.replacementPrice = ofiAsks.back().first;
                     result.replacementQty = ofiAsks.back().second;
