@@ -28,8 +28,7 @@ public:
 
     // ofiDepth: number of top price levels tracked in the OFI view per side (default 10).
     // tickSize: minimum price increment in internal 1e8 units (default 1 000 000 = $0.01).
-    explicit OrderBook(std::size_t ofiDepth = 10,
-                       long long tickSize = PriceLadder::kDefaultTick);
+    explicit OrderBook(std::size_t ofiDepth = 10, long long tickSize = PriceLadder::kDefaultTick);
 
     // Clears all state and rebuilds from the Binance-format snapshot JSON.
     // Rebuilds the OFI view from the top-ofiDepth levels of the new state.

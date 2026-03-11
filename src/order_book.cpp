@@ -13,21 +13,19 @@ constexpr double kPriceScale = 100'000'000.0;
 }
 
 OrderBook::OrderBook(std::size_t ofiDepthArg, long long tickSize)
-    : ofiDepth(ofiDepthArg),
-      bidLadder(tickSize),
-      askLadder(tickSize) {}
+    : ofiDepth(ofiDepthArg), bidLadder(tickSize), askLadder(tickSize) {}
 
 void OrderBook::applySnapshot(const nlohmann::json& snapshot) {
     const long long newLastUpdateId = snapshot["lastUpdateId"].get<long long>();
     std::vector<std::pair<long long, long long>> newAsks, newBids;
     for (const auto& ask : snapshot["asks"]) {
         long long price = parseDecimal(ask[0].get<std::string>());
-        long long qty   = parseDecimal(ask[1].get<std::string>());
+        long long qty = parseDecimal(ask[1].get<std::string>());
         if (qty > 0) newAsks.push_back({price, qty});
     }
     for (const auto& bid : snapshot["bids"]) {
         long long price = parseDecimal(bid[0].get<std::string>());
-        long long qty   = parseDecimal(bid[1].get<std::string>());
+        long long qty = parseDecimal(bid[1].get<std::string>());
         if (qty > 0) newBids.push_back({price, qty});
     }
 
@@ -70,7 +68,7 @@ UpdateResult OrderBook::applyUpdateCore(long long firstId, long long lastId,
 
 UpdateResult OrderBook::applyUpdate(const nlohmann::json& update, EventKind kind) {
     const long long firstId = update["U"].get<long long>();
-    const long long lastId  = update["u"].get<long long>();
+    const long long lastId = update["u"].get<long long>();
     std::vector<std::pair<long long, long long>> asks, bids;
     for (const auto& ask : update["a"]) {
         asks.push_back(
@@ -94,7 +92,11 @@ UpdateResult OrderBook::applyUpdate(long long firstId, long long lastId,
 
 std::vector<LevelDelta> OrderBook::applyDelta(const nlohmann::json& bidsArr,
                                               const nlohmann::json& asksArr, EventKind kind) {
-    struct ParsedLevel { long long price; long long qty; bool isBid; };
+    struct ParsedLevel {
+        long long price;
+        long long qty;
+        bool isBid;
+    };
     std::vector<ParsedLevel> parsed;
     for (const auto& bid : bidsArr) {
         parsed.push_back({parseDecimal(bid[0].get<std::string>()),
@@ -121,7 +123,9 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
     ladder.set(price, newQty);
 
     const long long delta = newQty - prevQty;
-    if (delta == 0) { return; }
+    if (delta == 0) {
+        return;
+    }
 
     const std::vector<Level>& viewRef = isBid ? ofiBids : ofiAsks;
     const bool wasInView = std::any_of(viewRef.begin(), viewRef.end(),
@@ -162,29 +166,29 @@ OrderBook::ViewChangeResult OrderBook::updateOfiView(long long price, long long 
                 const bool wasFull = (ofiBids.size() == ofiDepth);
                 ofiBids.erase(it);
                 // O(1) amortised: walk inward from the OFI boundary tick-by-tick.
-                const bool hasWorst    = !ofiBids.empty();
-                const long long worst  = hasWorst ? ofiBids.back().first : 0;
-                const long long repPrice = hasWorst ? bidLadder.prevBelow(worst)
-                                                    : bidLadder.bestHigh();
-                const long long repQty   = repPrice > 0 ? bidLadder.get(repPrice) : 0;
+                const bool hasWorst = !ofiBids.empty();
+                const long long worst = hasWorst ? ofiBids.back().first : 0;
+                const long long repPrice =
+                    hasWorst ? bidLadder.prevBelow(worst) : bidLadder.bestHigh();
+                const long long repQty = repPrice > 0 ? bidLadder.get(repPrice) : 0;
                 if (repPrice != 0) {
                     ofiBids.push_back({repPrice, repQty});
                 }
                 if (wasFull && ofiBids.size() == ofiDepth) {
                     result.replacementPrice = ofiBids.back().first;
-                    result.replacementQty   = ofiBids.back().second;
+                    result.replacementQty = ofiBids.back().second;
                 }
             } else {
                 it->second = newQty;
             }
         } else if (newQty > 0) {
             const bool viewNotFull = ofiBids.size() < ofiDepth;
-            const bool beatWorst   = !ofiBids.empty() && price > ofiBids.back().first;
+            const bool beatWorst = !ofiBids.empty() && price > ofiBids.back().first;
             if (viewNotFull || beatWorst) {
                 ofiBids.insert(it, {price, newQty});
                 if (ofiBids.size() > ofiDepth) {
                     result.evictedPrice = ofiBids.back().first;
-                    result.evictedQty   = ofiBids.back().second;
+                    result.evictedQty = ofiBids.back().second;
                     ofiBids.pop_back();
                 }
             }
@@ -199,29 +203,29 @@ OrderBook::ViewChangeResult OrderBook::updateOfiView(long long price, long long 
                 const bool wasFull = (ofiAsks.size() == ofiDepth);
                 ofiAsks.erase(it);
                 // O(1) amortised: walk outward from the OFI boundary tick-by-tick.
-                const bool hasWorst      = !ofiAsks.empty();
-                const long long worst    = hasWorst ? ofiAsks.back().first : 0;
-                const long long repPrice = hasWorst ? askLadder.nextAbove(worst)
-                                                    : askLadder.bestLow();
-                const long long repQty   = repPrice > 0 ? askLadder.get(repPrice) : 0;
+                const bool hasWorst = !ofiAsks.empty();
+                const long long worst = hasWorst ? ofiAsks.back().first : 0;
+                const long long repPrice =
+                    hasWorst ? askLadder.nextAbove(worst) : askLadder.bestLow();
+                const long long repQty = repPrice > 0 ? askLadder.get(repPrice) : 0;
                 if (repPrice != 0) {
                     ofiAsks.push_back({repPrice, repQty});
                 }
                 if (wasFull && ofiAsks.size() == ofiDepth) {
                     result.replacementPrice = ofiAsks.back().first;
-                    result.replacementQty   = ofiAsks.back().second;
+                    result.replacementQty = ofiAsks.back().second;
                 }
             } else {
                 it->second = newQty;
             }
         } else if (newQty > 0) {
             const bool viewNotFull = ofiAsks.size() < ofiDepth;
-            const bool beatWorst   = !ofiAsks.empty() && price < ofiAsks.back().first;
+            const bool beatWorst = !ofiAsks.empty() && price < ofiAsks.back().first;
             if (viewNotFull || beatWorst) {
                 ofiAsks.insert(it, {price, newQty});
                 if (ofiAsks.size() > ofiDepth) {
                     result.evictedPrice = ofiAsks.back().first;
-                    result.evictedQty   = ofiAsks.back().second;
+                    result.evictedQty = ofiAsks.back().second;
                     ofiAsks.pop_back();
                 }
             }
@@ -285,7 +289,9 @@ OrderBook::Snapshot OrderBook::getSnapshot() const {
     std::lock_guard<std::mutex> lock(orderBookMutex);
     Snapshot s;
     s.applied = snapshotApplied.load();
-    if (!s.applied) { return s; }
+    if (!s.applied) {
+        return s;
+    }
 
     askLadder.forEach([&s](long long p, long long q) { s.asks.push_back({p, q}); });
     // forEach visits in ascending order — asks are already ascending.

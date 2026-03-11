@@ -39,13 +39,13 @@ void PriceLadder::initCenter(long long price) {
 
 void PriceLadder::rebuildBestIndices() {
     bestHighIdx = -1;
-    bestLowIdx  = size;
+    bestLowIdx = size;
     count = 0;
     for (int i = 0; i < size; ++i) {
         if (qtys[i] > 0) {
             ++count;
             bestHighIdx = std::max(bestHighIdx, i);
-            bestLowIdx  = std::min(bestLowIdx, i);
+            bestLowIdx = std::min(bestLowIdx, i);
         }
     }
 }
@@ -59,14 +59,12 @@ void PriceLadder::recenter(long long price) {
         const int keep = size - shift;
         std::memmove(qtys.get(), qtys.get() + shift,
                      static_cast<std::size_t>(keep) * sizeof(long long));
-        std::memset(qtys.get() + keep, 0,
-                    static_cast<std::size_t>(shift) * sizeof(long long));
+        std::memset(qtys.get() + keep, 0, static_cast<std::size_t>(shift) * sizeof(long long));
     } else if (shift < 0 && -shift < size) {
         const int keep = size + shift;  // shift is negative
         std::memmove(qtys.get() - shift, qtys.get(),
                      static_cast<std::size_t>(keep) * sizeof(long long));
-        std::memset(qtys.get(), 0,
-                    static_cast<std::size_t>(-shift) * sizeof(long long));
+        std::memset(qtys.get(), 0, static_cast<std::size_t>(-shift) * sizeof(long long));
     } else {
         // Shift >= array size: all existing entries fall outside the new window.
         std::memset(qtys.get(), 0, static_cast<std::size_t>(size) * sizeof(long long));
@@ -82,7 +80,7 @@ void PriceLadder::set(long long price, long long qty) {
         recenter(price);
     }
 
-    const int idx       = toIdx(price);
+    const int idx = toIdx(price);
     const long long old = qtys[idx];
     qtys[idx] = qty;
 
@@ -96,14 +94,18 @@ void PriceLadder::set(long long price, long long qty) {
     if (qty > 0 && idx > bestHighIdx) {
         bestHighIdx = idx;
     } else if (qty == 0 && idx == bestHighIdx) {
-        while (bestHighIdx >= 0 && qtys[bestHighIdx] == 0) { --bestHighIdx; }
+        while (bestHighIdx >= 0 && qtys[bestHighIdx] == 0) {
+            --bestHighIdx;
+        }
     }
 
     // Maintain bestLowIdx.
     if (qty > 0 && idx < bestLowIdx) {
         bestLowIdx = idx;
     } else if (qty == 0 && idx == bestLowIdx) {
-        while (bestLowIdx < size && qtys[bestLowIdx] == 0) { ++bestLowIdx; }
+        while (bestLowIdx < size && qtys[bestLowIdx] == 0) {
+            ++bestLowIdx;
+        }
     }
 }
 
@@ -118,9 +120,9 @@ void PriceLadder::clear() {
     if (initialized) {
         std::memset(qtys.get(), 0, static_cast<std::size_t>(size) * sizeof(long long));
     }
-    count       = 0;
+    count = 0;
     bestHighIdx = -1;
-    bestLowIdx  = size;
+    bestLowIdx = size;
     initialized = false;
 }
 
