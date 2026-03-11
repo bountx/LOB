@@ -27,6 +27,7 @@ if(NOT BUILD_TESTS_ONLY)
     add_executable(lob_app
         src/main.cpp
         src/order_book.cpp
+        src/price_ladder.cpp
         src/binance_adapter.cpp
         src/kraken_adapter.cpp
     )
@@ -55,6 +56,7 @@ if(BUILD_TESTS)
         tests/test_symbol_normalizer.cpp
         tests/test_kraken_utils.cpp
         src/order_book.cpp
+        src/price_ladder.cpp
     )
 
     target_include_directories(lob_tests PRIVATE src)

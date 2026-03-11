@@ -3,11 +3,11 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <span>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "ofi_types.hpp"
+#include "price_ladder.hpp"
 
 class OrderBook {
 public:
@@ -27,7 +27,9 @@ public:
     };
 
     // ofiDepth: number of top price levels tracked in the OFI view per side (default 10).
-    explicit OrderBook(std::size_t ofiDepth = 10);
+    // tickSize: minimum price increment in internal 1e8 units (default 1 000 000 = $0.01).
+    explicit OrderBook(std::size_t ofiDepth = 10,
+                       long long tickSize = PriceLadder::kDefaultTick);
 
     // Clears all state and rebuilds from the Binance-format snapshot JSON.
     // Rebuilds the OFI view from the top-ofiDepth levels of the new state.
@@ -69,9 +71,10 @@ private:
     std::atomic<bool> snapshotApplied{false};
     std::size_t ofiDepth;
 
-    // State layer: O(1) lookup and update, unordered.
-    std::unordered_map<long long, long long> bidState;
-    std::unordered_map<long long, long long> askState;
+    // Full order book state via price ladders — O(1) insert/update/delete,
+    // O(1) best-price, O(ticks_gap) next/prev level (≈ O(1) for dense books).
+    PriceLadder bidLadder;
+    PriceLadder askLadder;
 
     // OFI view: top-ofiDepth levels per side, kept sorted.
     // ofiBids: sorted descending by price (best bid first).
@@ -80,8 +83,6 @@ private:
     std::vector<Level> ofiAsks;
 
     // Returned by updateOfiView to describe secondary OFI-view structural changes.
-    // Avoids diffing view snapshots: updateOfiView knows exactly what it evicted/added.
-    // A zero price means no change occurred on that slot.
     struct ViewChangeResult {
         long long evictedPrice = 0;
         long long evictedQty = 0;
@@ -102,12 +103,9 @@ private:
                           std::vector<LevelDelta>& out);
 
     // Update OFI view for one side after a level change.
-    // Returns a ViewChangeResult describing any eviction or replacement that occurred.
-    // Must be called with orderBookMutex held.
     ViewChangeResult updateOfiView(long long price, long long newQty, bool isBid);
 
-    // Full rebuild of one OFI view side from the state map (O(N log M)).
-    // Called when a level is removed from the view and a replacement must be found.
+    // Full rebuild of one OFI view side from the ladder (O(ofiDepth * avg_gap)).
     // Must be called with orderBookMutex held.
     void rebuildOfiSide(bool isBid);
 };
