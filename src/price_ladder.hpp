@@ -45,6 +45,9 @@ public:
     // Lowest price with qty > 0 strictly greater than 'above'.  Returns 0 if none.
     long long nextAbove(long long above) const;
 
+    // Returns true if price is within the current window (false when uninitialised).
+    bool inRange(long long price) const noexcept;
+
     // Visit every active level in ascending price order.  fn(price, qty).
     template <typename Fn>
     void forEach(Fn&& fn) const {
@@ -70,7 +73,6 @@ private:
 
     int toIdx(long long price) const noexcept;
     long long toPrice(int idx) const noexcept;
-    bool inRange(long long price) const noexcept;
 
     void initCenter(long long price);
     void recenter(long long price);
