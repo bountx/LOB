@@ -101,8 +101,8 @@ TEST_F(PrometheusFormatTest, SymbolLabelAppearsOnEveryDataLine) {
     const auto lines = dataLines(build());
     ASSERT_FALSE(lines.empty());
     for (const auto& line : lines) {
-        // Process-level metrics (e.g. lob_process_rss_bytes) carry no labels — skip them.
-        if (line.find('{') == std::string::npos) continue;
+        // RSS and subscriber metrics carry only exchange — not symbol — skip them.
+        if (line.find("symbol=") == std::string::npos) continue;
         EXPECT_NE(line.find("symbol=\"BTCUSDT\""), std::string::npos) << line;
     }
 }
@@ -292,4 +292,53 @@ TEST_F(PrometheusFormatTest, DataAgeHeadersPresentWhenDataExists) {
     const auto output = build();
     EXPECT_NE(output.find("# HELP lob_feed_data_age_seconds"), std::string::npos);
     EXPECT_NE(output.find("# TYPE lob_feed_data_age_seconds gauge"), std::string::npos);
+}
+
+// ─── Subscriber metrics: label and emitHeaders consistency ───────────────────
+
+TEST_F(PrometheusFormatTest, SubscriberMetricsCarryExchangeLabel) {
+    SubscriberStats sub;
+    sub.connectedClients = 3;
+    const auto output = buildPrometheusOutput("testex", metrics, books, &sub);
+    EXPECT_NE(output.find("lob_subscriber_connected_clients{exchange=\"testex\"}"),
+              std::string::npos);
+    EXPECT_NE(output.find("lob_subscriber_active_subscriptions{exchange=\"testex\"}"),
+              std::string::npos);
+    EXPECT_NE(output.find("lob_subscriber_messages_sent_total{exchange=\"testex\"}"),
+              std::string::npos);
+    EXPECT_NE(output.find("lob_subscriber_backpressure_disconnects_total{exchange=\"testex\"}"),
+              std::string::npos);
+}
+
+TEST_F(PrometheusFormatTest, SubscriberHeadersSuppressedWhenEmitHeadersFalse) {
+    SubscriberStats sub;
+    sub.connectedClients = 1;
+    const auto output = buildPrometheusOutput("testex", metrics, books, &sub, false);
+    // No HELP or TYPE comment lines.
+    EXPECT_EQ(output.find("# HELP lob_subscriber"), std::string::npos);
+    EXPECT_EQ(output.find("# TYPE lob_subscriber"), std::string::npos);
+    // Data lines are still present.
+    EXPECT_NE(output.find("lob_subscriber_connected_clients{exchange=\"testex\"} 1"),
+              std::string::npos);
+}
+
+TEST_F(PrometheusFormatTest, SubscriberDataLinesAbsentWhenSubStatsNull) {
+    const auto output = build();  // subStats defaults to nullptr
+    EXPECT_EQ(output.find("lob_subscriber"), std::string::npos);
+}
+
+// ─── RSS metric: label and emitHeaders consistency ───────────────────────────
+
+// When emitHeaders=false only data lines are produced — RSS included (on Linux).
+// On non-Linux hosts the RSS read returns nullopt and the metric is absent either way;
+// we verify that suppressing headers does NOT suppress the data line when the read succeeds.
+TEST_F(PrometheusFormatTest, RssHeadersSuppressedWhenEmitHeadersFalse) {
+    const auto withHeaders = buildPrometheusOutput("testex", metrics, books, nullptr, true);
+    const auto noHeaders = buildPrometheusOutput("testex", metrics, books, nullptr, false);
+    // If RSS is available (Linux), the data line must appear in both outputs.
+    if (withHeaders.find("lob_process_rss_bytes") != std::string::npos) {
+        EXPECT_NE(noHeaders.find("lob_process_rss_bytes"), std::string::npos);
+        EXPECT_EQ(noHeaders.find("# HELP lob_process_rss_bytes"), std::string::npos);
+        EXPECT_EQ(noHeaders.find("# TYPE lob_process_rss_bytes"), std::string::npos);
+    }
 }

@@ -8,14 +8,17 @@
 
 // Takes only the fractional digits (after the decimal point, no dot included).
 /**
- * @brief Parse the digits after a decimal point and return their value scaled to 8 fractional digits.
+ * @brief Parse the digits after a decimal point and return their value scaled to 8 fractional
+ * digits.
  *
  * Parses a string_view containing only fractional digits (the substring after '.'),
  * pads or scales the parsed value to exactly 8 decimal places, and returns the resulting integer.
  *
  * @param frac Fractional-digit substring (zero or more digits) following the decimal point.
- * @return long long Integer representing the fractional part scaled by 100,000,000 (8 decimal places).
- * @throws std::runtime_error If `frac` contains non-digit characters, has more than 8 digits, or cannot be parsed.
+ * @return long long Integer representing the fractional part scaled by 100,000,000 (8 decimal
+ * places).
+ * @throws std::runtime_error If `frac` contains non-digit characters, has more than 8 digits, or
+ * cannot be parsed.
  */
 inline long long parseFractionalPart(std::string_view frac) {
     if (frac.empty()) return 0LL;
