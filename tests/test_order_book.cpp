@@ -481,6 +481,234 @@ TEST(OrderBook, OfiViewBidRefillsWhenLevelRemovedFromView) {
     EXPECT_GT(result.deltas[1].deltaQty, 0LL);  // positive: view qty grew from 0
 }
 
+// ─── OFI replacement scan: delete best / middle / worst / empty-view ─────────
+//
+// These tests exercise the targeted O(N) replacement scan introduced in
+// updateOfiView to replace the old rebuildOfiSide() call. Each test removes an
+// in-view level and asserts that (a) the view remains correctly sorted, (b) the
+// next-outside level is picked as the replacement, and (c) the Maintenance delta
+// describes the replacement entry accurately.
+
+// --- Ask-side ---
+
+TEST(OrderBook, OfiReplacementScanAskDeleteBest) {
+    // ofiDepth=3, 4 ask levels. View=[50001, 50002, 50003], 50004 outside.
+    // Delete best ask (50001); 50004 should slide in at the back.
+    OrderBook book(3);
+    book.applySnapshot(makeSnapshot(
+        100, {{"50001.00", "1.0"}, {"50002.00", "1.0"}, {"50003.00", "1.0"}, {"50004.00", "1.0"}},
+        {}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {{"50001.00", "0.0"}}, {}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // View must be ordered ascending: 50002 < 50003 < 50004.
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestAsk, 50002.0, 1e-6);
+
+    // Maintenance delta: 50004 enters the view.
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_EQ(result.deltas[1].price, 5000400000000LL);  // 50004 * 1e8
+    EXPECT_FALSE(result.deltas[1].wasInView);
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);
+}
+
+TEST(OrderBook, OfiReplacementScanAskDeleteMiddle) {
+    // ofiDepth=3, 4 ask levels. View=[50001, 50002, 50003], 50004 outside.
+    // Delete middle ask (50002); 50004 should slide in at the back.
+    OrderBook book(3);
+    book.applySnapshot(makeSnapshot(
+        100, {{"50001.00", "1.0"}, {"50002.00", "1.0"}, {"50003.00", "1.0"}, {"50004.00", "1.0"}},
+        {}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {{"50002.00", "0.0"}}, {}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // View must be ordered ascending: 50001 < 50003 < 50004.
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestAsk, 50001.0, 1e-6);
+
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].price, 5000400000000LL);  // 50004 * 1e8
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);
+}
+
+TEST(OrderBook, OfiReplacementScanAskDeleteWorst) {
+    // ofiDepth=3, 4 ask levels. View=[50001, 50002, 50003], 50004 outside.
+    // Delete worst-in-view ask (50003); 50004 should slide in at the back.
+    OrderBook book(3);
+    book.applySnapshot(makeSnapshot(
+        100, {{"50001.00", "1.0"}, {"50002.00", "1.0"}, {"50003.00", "1.0"}, {"50004.00", "1.0"}},
+        {}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {{"50003.00", "0.0"}}, {}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // View must be ordered ascending: 50001 < 50002 < 50004.
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestAsk, 50001.0, 1e-6);
+
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].price, 5000400000000LL);  // 50004 * 1e8
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);
+}
+
+TEST(OrderBook, OfiReplacementScanAskNoReplacementWhenNothingOutside) {
+    // ofiDepth=2, exactly 2 ask levels — both in view, nothing outside.
+    // Deleting one shrinks the view to 1 with no Maintenance delta.
+    OrderBook book(2);
+    book.applySnapshot(makeSnapshot(100, {{"50001.00", "1.0"}, {"50002.00", "1.0"}}, {}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {{"50001.00", "0.0"}}, {}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // Only the Genuine removal delta — no Maintenance delta.
+    ASSERT_EQ(result.deltas.size(), 1u);
+    EXPECT_EQ(result.deltas[0].kind, EventKind::Genuine);
+
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestAsk, 50002.0, 1e-6);
+}
+
+TEST(OrderBook, OfiReplacementScanAskEmptyViewGetsRefilled) {
+    // ofiDepth=1: deleting the only in-view ask triggers the threshold=0 path
+    // (any remaining ask is eligible). The next ask should fill the view.
+    OrderBook book(1);
+    book.applySnapshot(makeSnapshot(100, {{"50001.00", "1.0"}, {"50002.00", "1.0"}}, {}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {{"50001.00", "0.0"}}, {}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestAsk, 50002.0, 1e-6);
+
+    // Maintenance delta for 50002 entering the view.
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_EQ(result.deltas[1].price, 5000200000000LL);  // 50002 * 1e8
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+}
+
+// --- Bid-side ---
+
+TEST(OrderBook, OfiReplacementScanBidDeleteBest) {
+    // ofiDepth=3, 4 bid levels. View=[50000, 49999, 49998], 49997 outside.
+    // Delete best bid (50000); 49997 should slide in at the back.
+    OrderBook book(3);
+    book.applySnapshot(makeSnapshot(
+        100, {},
+        {{"50000.00", "1.0"}, {"49999.00", "1.0"}, {"49998.00", "1.0"}, {"49997.00", "1.0"}}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {}, {{"50000.00", "0.0"}}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // View must be ordered descending: 49999 > 49998 > 49997.
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestBid, 49999.0, 1e-6);
+
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_EQ(result.deltas[1].price, 4999700000000LL);  // 49997 * 1e8
+    EXPECT_FALSE(result.deltas[1].wasInView);
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);
+}
+
+TEST(OrderBook, OfiReplacementScanBidDeleteMiddle) {
+    // ofiDepth=3, 4 bid levels. View=[50000, 49999, 49998], 49997 outside.
+    // Delete middle bid (49999); 49997 should slide in at the back.
+    OrderBook book(3);
+    book.applySnapshot(makeSnapshot(
+        100, {},
+        {{"50000.00", "1.0"}, {"49999.00", "1.0"}, {"49998.00", "1.0"}, {"49997.00", "1.0"}}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {}, {{"49999.00", "0.0"}}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // View must be ordered descending: 50000 > 49998 > 49997.
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestBid, 50000.0, 1e-6);
+
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].price, 4999700000000LL);  // 49997 * 1e8
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);
+}
+
+TEST(OrderBook, OfiReplacementScanBidDeleteWorst) {
+    // ofiDepth=3, 4 bid levels. View=[50000, 49999, 49998], 49997 outside.
+    // Delete worst-in-view bid (49998); 49997 should slide in at the back.
+    OrderBook book(3);
+    book.applySnapshot(makeSnapshot(
+        100, {},
+        {{"50000.00", "1.0"}, {"49999.00", "1.0"}, {"49998.00", "1.0"}, {"49997.00", "1.0"}}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {}, {{"49998.00", "0.0"}}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    // View must be ordered descending: 50000 > 49999 > 49997.
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestBid, 50000.0, 1e-6);
+
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].price, 4999700000000LL);  // 49997 * 1e8
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+    EXPECT_GT(result.deltas[1].deltaQty, 0LL);
+}
+
+TEST(OrderBook, OfiReplacementScanBidNoReplacementWhenNothingOutside) {
+    // ofiDepth=2, exactly 2 bid levels — both in view, nothing outside.
+    // Deleting one shrinks the view to 1 with no Maintenance delta.
+    OrderBook book(2);
+    book.applySnapshot(makeSnapshot(100, {}, {{"50000.00", "1.0"}, {"49999.00", "1.0"}}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {}, {{"50000.00", "0.0"}}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    ASSERT_EQ(result.deltas.size(), 1u);
+    EXPECT_EQ(result.deltas[0].kind, EventKind::Genuine);
+
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestBid, 49999.0, 1e-6);
+}
+
+TEST(OrderBook, OfiReplacementScanBidEmptyViewGetsRefilled) {
+    // ofiDepth=1: deleting the only in-view bid triggers the !hasWorst path
+    // (any remaining bid is eligible). The next bid should fill the view.
+    OrderBook book(1);
+    book.applySnapshot(makeSnapshot(100, {}, {{"50000.00", "1.0"}, {"49999.00", "1.0"}}));
+
+    auto result =
+        book.applyUpdate(makeUpdate(101, 101, {}, {{"50000.00", "0.0"}}), EventKind::Genuine);
+    EXPECT_TRUE(result.success);
+
+    auto stats = book.getStats();
+    EXPECT_NEAR(stats.bestBid, 49999.0, 1e-6);
+
+    // Maintenance delta for 49999 entering the view.
+    ASSERT_EQ(result.deltas.size(), 2u);
+    EXPECT_EQ(result.deltas[1].kind, EventKind::Maintenance);
+    EXPECT_EQ(result.deltas[1].price, 4999900000000LL);  // 49999 * 1e8
+    EXPECT_TRUE(result.deltas[1].inOfiView);
+}
+
 // ─── OFI formula ──────────────────────────────────────────────────────────────
 
 TEST(OrderBook, OfiComputationBidMinusAsk) {

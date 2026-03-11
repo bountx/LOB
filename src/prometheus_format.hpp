@@ -74,24 +74,30 @@ inline std::string escapeLabelValue(std::string_view v) {
 //
 // Spread and best-price lines are skipped when the book is empty (no snapshot
 /**
- * @brief Constructs a Prometheus text exposition of adapter and order-book metrics, labeling each
- * metric with `exchange` and `symbol`.
+ * @brief Constructs a Prometheus text exposition of adapter and order-book metrics.
  *
- * Emits counters, gauges and histograms for per-symbol metrics (messages, event lag, processing
- * time buckets/sum/count, order book levels and prices, spread, OFI) and optional process- and
- * subscriber-level metrics.
+ * **Labeling:**
+ * - Per-symbol metrics (from `metricsMap` and `books->getStats()`) carry both
+ *   `exchange="..."` and `symbol="..."` labels.
+ * - `lob_process_rss_bytes` and subscriber metrics (from `subStats`) carry only
+ *   `exchange="..."` — they are adapter-scoped but not per-symbol.
  *
- * @param exchange Label value used for the `exchange` metric label.
- * @param metricsMap Map from symbol to `Metrics`; used to emit per-symbol counters, gauges,
- * histograms and OFI values.
- * @param books Map from symbol to `OrderBook`; `getStats()` is called once per book to obtain
- * per-symbol order-book statistics.
- * @param subStats Optional subscriber server stats; when non-null, subscriber-related metrics are
- * emitted. Omit to skip these metrics.
- * @param emitHeaders If true, HELP and TYPE headers are included for emitted metrics; when false,
- * only metric lines are produced.
- * @return std::string Prometheus exposition text containing metric lines (and HELP/TYPE headers
- * when `emitHeaders` is true).
+ * **HELP/TYPE headers (`emitHeaders`):**
+ * - When `true` (default): HELP and TYPE headers are emitted for every metric family.
+ * - When `false`: only data lines are produced — applies uniformly to per-symbol,
+ *   RSS, and subscriber metrics. (`lob_process_rss_bytes` data is still emitted
+ *   when the RSS read succeeds; subscriber data lines are still emitted when
+ *   `subStats` is non-null.)
+ *
+ * @param exchange Label value used for the `exchange` label on every emitted line.
+ * @param metricsMap Map from symbol to `Metrics`; drives per-symbol counters, gauges,
+ *   histograms, and OFI accumulator lines.
+ * @param books Map from symbol to `OrderBook`; `getStats()` is called once per book
+ *   to obtain level counts and best-price values.
+ * @param subStats Optional subscriber server stats; when non-null, subscriber metrics are
+ *   emitted. Null → subscriber metrics are skipped entirely.
+ * @param emitHeaders If true, HELP and TYPE comment lines precede each metric family.
+ * @return std::string Prometheus text exposition.
  */
 inline std::string buildPrometheusOutput(
     std::string_view exchange,
@@ -236,36 +242,52 @@ inline std::string buildPrometheusOutput(
         }
     }
 
-    // Process-level memory — emitted only on the first view to avoid duplication.
-    if (emitHeaders) {
-        if (const auto rss = readRssBytes()) {
+    // Process-level memory — labeled with exchange only (not per-symbol).
+    if (const auto rss = readRssBytes()) {
+        if (emitHeaders) {
             ss << "# HELP lob_process_rss_bytes Resident set size of the process in bytes\n";
             ss << "# TYPE lob_process_rss_bytes gauge\n";
-            ss << "lob_process_rss_bytes " << *rss << "\n";
         }
+        ss << "lob_process_rss_bytes{exchange=\"" << escapeLabelValue(exchange) << "\"} " << *rss
+           << "\n";
     }
 
     // Subscriber server stats (injected by MetricsServer when available).
+    // Labeled with exchange only (not per-symbol). HELP/TYPE respect emitHeaders.
     if (subStats) {
-        ss << "# HELP lob_subscriber_connected_clients"
-              " Current number of connected WebSocket subscriber clients\n";
-        ss << "# TYPE lob_subscriber_connected_clients gauge\n";
-        ss << "lob_subscriber_connected_clients " << subStats->connectedClients << "\n";
+        const std::string exchEsc = escapeLabelValue(exchange);
 
-        ss << "# HELP lob_subscriber_active_subscriptions"
-              " Total active stream subscriptions across all connected clients\n";
-        ss << "# TYPE lob_subscriber_active_subscriptions gauge\n";
-        ss << "lob_subscriber_active_subscriptions " << subStats->activeSubscriptions << "\n";
+        if (emitHeaders) {
+            ss << "# HELP lob_subscriber_connected_clients"
+                  " Current number of connected WebSocket subscriber clients\n";
+            ss << "# TYPE lob_subscriber_connected_clients gauge\n";
+        }
+        ss << "lob_subscriber_connected_clients{exchange=\"" << exchEsc << "\"} "
+           << subStats->connectedClients << "\n";
 
-        ss << "# HELP lob_subscriber_messages_sent_total"
-              " Total messages broadcast to subscriber clients\n";
-        ss << "# TYPE lob_subscriber_messages_sent_total counter\n";
-        ss << "lob_subscriber_messages_sent_total " << subStats->messagesSentTotal << "\n";
+        if (emitHeaders) {
+            ss << "# HELP lob_subscriber_active_subscriptions"
+                  " Total active stream subscriptions across all connected clients\n";
+            ss << "# TYPE lob_subscriber_active_subscriptions gauge\n";
+        }
+        ss << "lob_subscriber_active_subscriptions{exchange=\"" << exchEsc << "\"} "
+           << subStats->activeSubscriptions << "\n";
 
-        ss << "# HELP lob_subscriber_backpressure_disconnects_total"
-              " Clients disconnected because their send buffer exceeded the backpressure limit\n";
-        ss << "# TYPE lob_subscriber_backpressure_disconnects_total counter\n";
-        ss << "lob_subscriber_backpressure_disconnects_total "
+        if (emitHeaders) {
+            ss << "# HELP lob_subscriber_messages_sent_total"
+                  " Total messages broadcast to subscriber clients\n";
+            ss << "# TYPE lob_subscriber_messages_sent_total counter\n";
+        }
+        ss << "lob_subscriber_messages_sent_total{exchange=\"" << exchEsc << "\"} "
+           << subStats->messagesSentTotal << "\n";
+
+        if (emitHeaders) {
+            ss << "# HELP lob_subscriber_backpressure_disconnects_total"
+                  " Clients disconnected because their send buffer exceeded the backpressure"
+                  " limit\n";
+            ss << "# TYPE lob_subscriber_backpressure_disconnects_total counter\n";
+        }
+        ss << "lob_subscriber_backpressure_disconnects_total{exchange=\"" << exchEsc << "\"} "
            << subStats->backpressureDisconnectsTotal << "\n";
     }
 
