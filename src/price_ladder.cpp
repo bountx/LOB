@@ -1,6 +1,7 @@
 #include "price_ladder.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -81,6 +82,7 @@ void PriceLadder::recenter(long long price) {
 }
 
 void PriceLadder::set(long long price, long long qty) {
+    assert(qty >= 0 && "qty must be non-negative");
     if (!initialized) {
         initCenter(price);
     } else if (!inRange(price)) {
