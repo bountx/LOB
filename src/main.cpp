@@ -311,9 +311,24 @@ int main(int argc, char* argv[]) {
     }
 
     for (size_t i = 0; i < runtimes.size(); ++i) {
-        if (!runtimes[i].adapter->start(runtimes[i].symbols, runtimes[i].books,
-                                        runtimes[i].metricsMap, snapshotDepth)) {
-            fprintf(stderr, "failed to start %s adapter\n", runtimes[i].name.c_str());
+        constexpr int kMaxStartAttempts = 10;
+        constexpr int kBackoffCapSec    = 300;
+        int backoffSec = 30;
+        bool started = false;
+        for (int attempt = 1; attempt <= kMaxStartAttempts; ++attempt) {
+            if (runtimes[i].adapter->start(runtimes[i].symbols, runtimes[i].books,
+                                           runtimes[i].metricsMap, snapshotDepth)) {
+                started = true;
+                break;
+            }
+            fprintf(stderr, "failed to start %s adapter (attempt %d/%d), retrying in %ds\n",
+                    runtimes[i].name.c_str(), attempt, kMaxStartAttempts, backoffSec);
+            std::this_thread::sleep_for(std::chrono::seconds(backoffSec));
+            backoffSec = std::min(backoffSec * 2, kBackoffCapSec);
+        }
+        if (!started) {
+            fprintf(stderr, "gave up starting %s adapter after %d attempts\n",
+                    runtimes[i].name.c_str(), kMaxStartAttempts);
             for (size_t j = 0; j < i; ++j) {
                 runtimes[j].adapter->stop();
             }

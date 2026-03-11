@@ -12,11 +12,11 @@
 // dense books (BTC/USDT at $0.01 tick).
 //
 // Memory: (2 * halfRange + 1) * 8 bytes per ladder.
-// Default: ±300 000 ticks = ±$3 000 at $0.01 tick ≈ 4.8 MB per ladder.
+// Default: ±5 000 ticks = ±$50 at $0.01 tick ≈ 78 KB per ladder.
 class PriceLadder {
 public:
     static constexpr long long kDefaultTick = 1'000'000LL;  // $0.01 in 1e8 units
-    static constexpr int kDefaultHalfRange = 300'000;       // ±$3 000 at default tick
+    static constexpr int kDefaultHalfRange = 5'000;         // ±$50 at default tick
 
     explicit PriceLadder(long long tickSizeArg = kDefaultTick,
                          int halfRangeArg = kDefaultHalfRange);
