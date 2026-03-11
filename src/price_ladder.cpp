@@ -61,14 +61,16 @@ void PriceLadder::rebuildBestIndices() {
 void PriceLadder::recenter(long long price) {
     const long long rounded = (price / tickSize) * tickSize;
     const long long newBase = rounded - (static_cast<long long>(halfRange) * tickSize);
-    const int shift = static_cast<int>((newBase - basePrice) / tickSize);
+    const long long shiftLL = (newBase - basePrice) / tickSize;
 
-    if (shift > 0 && shift < size) {
+    if (shiftLL > 0 && shiftLL < static_cast<long long>(size)) {
+        const int shift = static_cast<int>(shiftLL);
         const int keep = size - shift;
         std::memmove(qtys.get(), qtys.get() + shift,
                      static_cast<std::size_t>(keep) * sizeof(long long));
         std::memset(qtys.get() + keep, 0, static_cast<std::size_t>(shift) * sizeof(long long));
-    } else if (shift < 0 && -shift < size) {
+    } else if (shiftLL < 0 && -shiftLL < static_cast<long long>(size)) {
+        const int shift = static_cast<int>(shiftLL);
         const int keep = size + shift;  // shift is negative
         std::memmove(qtys.get() - shift, qtys.get(),
                      static_cast<std::size_t>(keep) * sizeof(long long));
