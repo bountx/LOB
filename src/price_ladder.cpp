@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -92,6 +94,13 @@ void PriceLadder::set(long long price, long long qty) {
     }
 
     const int idx = toIdx(price);
+    if (idx < 0 || idx >= size) {
+        fprintf(stderr, "FATAL: PriceLadder::set() index out of bounds!\n"
+                        "  price=%lld qty=%lld basePrice=%lld tickSize=%lld\n"
+                        "  idx=%d size=%d initialized=%d\n",
+                price, qty, basePrice, tickSize, idx, size, (int)initialized);
+        std::abort();
+    }
     const long long old = qtys[idx];
     qtys[idx] = qty;
 
