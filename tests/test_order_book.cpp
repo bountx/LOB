@@ -740,7 +740,7 @@ TEST(OrderBook, OfiComputationBidMinusAsk) {
 
 // ─── Recentering on out-of-range updates ─────────────────────────────────────
 
-TEST(OrderBook, IncrementalUpdateRecentersForOutOfRangePrices) {
+TEST(OrderBook, IncrementalUpdateDirectionalRecenter) {
     // Default tick = $0.01 (1 000 000), halfRange = 5 000 → window ±$50.
     OrderBook book;
     book.applySnapshot(makeSnapshot(100, {{"50001.00", "1.5"}}, {{"49999.00", "2.0"}}));
@@ -749,39 +749,44 @@ TEST(OrderBook, IncrementalUpdateRecentersForOutOfRangePrices) {
     EXPECT_DOUBLE_EQ(stats.bestAsk, 50001.0);
     EXPECT_DOUBLE_EQ(stats.bestBid, 49999.0);
 
-    // Send an update with a far-away ask price ($200 from mid).
-    // This triggers a recenter + OFI rebuild, so the new price becomes the best
-    // ask while the old $50001 may or may not survive depending on the new window.
+    // Far-away ask ABOVE the window → deep-book level for asks → dropped.
+    // Far-away bid ABOVE the window → market moved up → recentered.
     auto res = book.applyUpdate(makeUpdate(101, 101,
-                                           {{"50200.00", "0.1"}},  // far out-of-range ask
-                                           {{"49999.00", "3.0"}}), // normal bid update
+                                           {{"50200.00", "0.1"}},  // deep ask → dropped
+                                           {{"50100.00", "3.0"}}), // bid above window → recenter
                                 EventKind::Genuine);
     EXPECT_TRUE(res.success);
 
     stats = book.getStats();
-    // The far-away ask was applied (recentered the ask ladder).
-    EXPECT_GE(stats.asksCount, 1u);
-    // Best bid still tracks the updated qty at 49999.00.
-    EXPECT_DOUBLE_EQ(stats.bestBid, 49999.0);
+    // The far-away ask was dropped (it's a deep-book ask above the window).
+    // The original ask at 50001.00 may or may not survive the bid recenter.
+    // The bid at 50100.00 triggered a recenter and was applied.
+    EXPECT_GE(stats.bidsCount, 1u);
+    EXPECT_NEAR(stats.bestBid, 50100.0, 1e-6);
 }
 
-TEST(OrderBook, DeltaRecentersForOutOfRangePrices) {
+TEST(OrderBook, DeltaDirectionalRecentering) {
     OrderBook book;
     book.applySnapshot(makeSnapshot(0, {{"50001.00", "1.5"}}, {{"49999.00", "2.0"}}));
 
-    // Kraken-style applyDelta with a far-away price triggers recenter.
+    // Kraken-style applyDelta:
+    //   - bid at $49960 is in range → applied normally
+    //   - bid at $40000 is BELOW the window → deep-book bid → dropped
+    //   - ask at $49800 is BELOW the window → market moved down → recenter
     nlohmann::json bids = nlohmann::json::array();
-    bids.push_back({"49960.00", "5.0"});   // ±$50 window → this IS in range
-    bids.push_back({"40000.00", "1.0"});   // ~$10,000 away → triggers recenter
+    bids.push_back({"49960.00", "5.0"});   // in range
+    bids.push_back({"40000.00", "1.0"});   // below window → dropped (deep bid)
     nlohmann::json asks = nlohmann::json::array();
+    asks.push_back({"49800.00", "2.0"});   // below window → recentered (market moved down)
 
     auto deltas = book.applyDelta(bids, asks, EventKind::Genuine);
 
     auto stats = book.getStats();
-    // Both bids were applied (49960.00 in range, 40000.00 triggers recenter).
-    // After recentering around $40000, $49999 and $49960 may fall outside the
-    // new window, leaving only $40000.  At minimum $40000 survives.
-    EXPECT_GE(stats.bidsCount, 1u);
+    // $49960 applied (in range), $40000 dropped (deep bid below window).
+    EXPECT_EQ(stats.bidsCount, 2u);  // original $49999 + $49960
+    EXPECT_NEAR(stats.bestBid, 49999.0, 1e-6);
+    // $49800 ask triggered recenter and was applied.
+    EXPECT_GE(stats.asksCount, 1u);
 }
 // Regression test for int overflow in PriceLadder::inRange/toIdx.
 // A price that overflows static_cast<int>(offset/tickSize) must be correctly
