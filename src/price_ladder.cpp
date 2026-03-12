@@ -43,6 +43,16 @@ bool PriceLadder::inRange(long long price) const noexcept {
     return (offset / tickSize) < static_cast<long long>(size);
 }
 
+bool PriceLadder::closeToWindow(long long price) const noexcept {
+    if (!initialized) return false;
+    // Centre of the current window.
+    const long long centre = basePrice + static_cast<long long>(halfRange) * tickSize;
+    const long long dist = (price > centre) ? (price - centre) : (centre - price);
+    // Accept if within 2× the half-range (generous enough to track normal
+    // market moves; far outliers like depth-1000 deep levels are rejected).
+    return dist <= 2LL * static_cast<long long>(halfRange) * tickSize;
+}
+
 void PriceLadder::initCenter(long long price) {
     const long long rounded = (price / tickSize) * tickSize;
     basePrice = rounded - (static_cast<long long>(halfRange) * tickSize);

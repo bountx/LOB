@@ -130,6 +130,17 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
 
     const long long prevQty = ladder.get(price);
 
+    // For out-of-range prices there are two cases:
+    //  (a) The price is close to the window edge — the market moved and we
+    //      should recenter to follow it.
+    //  (b) The price is far away — it's a deep-book level update that would
+    //      destroy near-mid levels if we recentered.  Drop it.
+    if (ladder.activeCount() > 0 && !ladder.inRange(price)) {
+        if (!ladder.closeToWindow(price)) {
+            return;  // deep-book outlier — silently drop
+        }
+    }
+
     const bool recentered = ladder.set(price, newQty);
 
     // After a recenter the OFI view contains stale prices that may have fallen

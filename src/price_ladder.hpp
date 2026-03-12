@@ -49,6 +49,12 @@ public:
     // Returns true if price is within the current window (false when uninitialised).
     bool inRange(long long price) const noexcept;
 
+    // Returns true if price is near the window (within 2× the half-range from
+    // the current centre).  Used to decide whether to recenter for out-of-range
+    // updates: close-to-window prices trigger a recenter (market moved), while
+    // far-away deep-book outliers are silently dropped.
+    bool closeToWindow(long long price) const noexcept;
+
     // Visit every active level in ascending price order.  fn(price, qty).
     template <typename Fn>
     void forEach(Fn&& fn) const {
