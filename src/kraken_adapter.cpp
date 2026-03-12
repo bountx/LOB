@@ -207,10 +207,29 @@ void KrakenAdapter::handleWsMessage(const ix::WebSocketMessagePtr& msg) {
                 const std::string errMsg =
                     j.contains("error") ? j["error"].get<std::string>() : "unknown error";
                 fprintf(stderr, "[kraken] subscribe failed: %s\n", errMsg.c_str());
-                std::lock_guard<std::mutex> lock(snapshotMutex_);
-                subscribeError_ = true;
-                pendingSnapshots_.clear();
-                snapshotCv_.notify_all();
+
+                // Per-symbol failure: extract the failed symbol from the error response
+                // and remove ONLY that symbol from pendingSnapshots_ so the remaining
+                // symbols can still succeed.  If the error response contains a result.symbol
+                // field we can match exactly; otherwise fall through to the legacy path.
+                bool handled = false;
+                if (j.contains("result") && j["result"].contains("symbol")) {
+                    const std::string failedKrakenSym = j["result"]["symbol"].get<std::string>();
+                    auto canonical = normalizer_.toCanonical("kraken", failedKrakenSym);
+                    if (canonical) {
+                        std::lock_guard<std::mutex> lock(snapshotMutex_);
+                        pendingSnapshots_.erase(*canonical);
+                        if (pendingSnapshots_.empty()) snapshotCv_.notify_all();
+                        handled = true;
+                    }
+                }
+                if (!handled) {
+                    // Can't identify the specific symbol — abort all.
+                    std::lock_guard<std::mutex> lock(snapshotMutex_);
+                    subscribeError_ = true;
+                    pendingSnapshots_.clear();
+                    snapshotCv_.notify_all();
+                }
             }
             return;
         }
@@ -310,6 +329,9 @@ bool KrakenAdapter::start(const std::vector<std::string>& symbols,
 
     webSocket_.setUrl("wss://ws.kraken.com/v2");
     webSocket_.setPingInterval(30);
+    // Disable IXWebSocket auto-reconnect.  The watchdog handles reconnection;
+    // auto-reconnect during start() failures would leak connections and memory.
+    webSocket_.disableAutomaticReconnection();
     webSocket_.setOnMessageCallback(
         [this](const ix::WebSocketMessagePtr& msg) { handleWsMessage(msg); });
     webSocket_.start();

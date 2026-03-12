@@ -329,6 +329,9 @@ int main(int argc, char* argv[]) {
         if (!started) {
             fprintf(stderr, "gave up starting %s adapter after %d attempts\n",
                     runtimes[i].name.c_str(), kMaxStartAttempts);
+            // Stop the failed adapter too — its WebSocket may still be running
+            // with IXWebSocket auto-reconnect, leaking connections and memory.
+            runtimes[i].adapter->stop();
             for (size_t j = 0; j < i; ++j) {
                 runtimes[j].adapter->stop();
             }
