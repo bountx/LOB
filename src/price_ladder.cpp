@@ -23,6 +23,7 @@ PriceLadder::PriceLadder(long long tickSizeArg, int halfRangeArg) {
 }
 
 int PriceLadder::toIdx(long long price) const noexcept {
+    // Caller must ensure price is inRange() — toIdx does NOT bounds-check.
     return static_cast<int>((price - basePrice) / tickSize);
 }
 
@@ -38,7 +39,8 @@ bool PriceLadder::inRange(long long price) const noexcept {
     if (offset < 0) {
         return false;
     }
-    return static_cast<int>(offset / tickSize) < size;
+    // Compare as long long to avoid int overflow on extreme prices.
+    return (offset / tickSize) < static_cast<long long>(size);
 }
 
 void PriceLadder::initCenter(long long price) {
@@ -94,13 +96,7 @@ void PriceLadder::set(long long price, long long qty) {
     }
 
     const int idx = toIdx(price);
-    if (idx < 0 || idx >= size) {
-        fprintf(stderr, "FATAL: PriceLadder::set() index out of bounds!\n"
-                        "  price=%lld qty=%lld basePrice=%lld tickSize=%lld\n"
-                        "  idx=%d size=%d initialized=%d\n",
-                price, qty, basePrice, tickSize, idx, size, (int)initialized);
-        std::abort();
-    }
+    assert(idx >= 0 && idx < size && "PriceLadder::set: index out of bounds after inRange check");
     const long long old = qtys[idx];
     qtys[idx] = qty;
 
@@ -170,8 +166,8 @@ long long PriceLadder::prevBelow(long long below) const {
     if (offset <= 0) {
         return 0;
     }
-    int startIdx = static_cast<int>((offset - 1) / tickSize);
-    startIdx = std::min(startIdx, size - 1);
+    const long long rawIdx = (offset - 1) / tickSize;
+    int startIdx = (rawIdx >= static_cast<long long>(size)) ? size - 1 : static_cast<int>(rawIdx);
     for (int i = startIdx; i >= 0; --i) {
         if (qtys[i] > 0) {
             return toPrice(i);
@@ -189,10 +185,9 @@ long long PriceLadder::nextAbove(long long above) const {
     if (offset < 0) {
         startIdx = 0;
     } else {
-        startIdx = static_cast<int>(offset / tickSize) + 1;
-    }
-    if (startIdx >= size) {
-        return 0;
+        const long long rawIdx = offset / tickSize + 1;
+        if (rawIdx >= static_cast<long long>(size)) return 0;
+        startIdx = static_cast<int>(rawIdx);
     }
     for (int i = startIdx; i < size; ++i) {
         if (qtys[i] > 0) {

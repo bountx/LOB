@@ -784,3 +784,23 @@ TEST(OrderBook, DeltaSkipsOutOfRangePrices) {
     // The in-range bid was added; the out-of-range bid was skipped.
     EXPECT_EQ(stats.bidsCount, 2u);  // 49999.00 + 49960.00
 }
+// Regression test for int overflow in PriceLadder::inRange/toIdx.
+// A price that overflows static_cast<int>(offset/tickSize) must be correctly
+// rejected — not silently wrapped to a negative index.
+TEST(OrderBook, SnapshotWithExtremeOutOfRangePriceDoesNotCrash) {
+    OrderBook book(10);
+    // Normal bid first (sets center around 405.00), then an absurd price
+    // ($161,332,696.00 — the exact value seen in the Kraken crash).
+    auto snap = makeSnapshot(
+        0,
+        {{"406.00", "1.00000000"}},                    // ask
+        {{"405.00", "1.00000000"},                      // bid — sets center
+         {"161332696.00000000", "0.05190000"}}          // extreme price
+    );
+    // Must not crash (segfault).  The extreme price should be silently
+    // dropped by the inRange guard.
+    EXPECT_NO_FATAL_FAILURE(book.applySnapshot(snap));
+    auto stats = book.getStats();
+    EXPECT_EQ(stats.bidsCount, 1u);  // only 405.00 survives
+    EXPECT_EQ(stats.asksCount, 1u);
+}
