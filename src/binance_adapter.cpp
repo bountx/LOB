@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <future>
 #include <stdexcept>
 #include <stop_token>
 #include <thread>
@@ -535,49 +534,46 @@ bool BinanceAdapter::start(const std::vector<std::string>& symbols,
         runResyncWorker(maxSnapshotRetries, stoken);
     });
 
-    // Don't fetch all snapshots at once. 30 parallel requests = 300 weight in one burst,
-    // which is fine in isolation, but Docker restarts compound this fast enough to earn a 429
-    // or 418 ban. A 300ms gap between launches keeps only a handful of requests in-flight at a
-    // time.
+    // Fetch snapshots sequentially to avoid exceeding Binance's rate limit.
+    // Each depth?limit=1000 request costs ~50 weight; 28 symbols × 50 = 1400
+    // weight, which fits within the 6000/min budget when done sequentially but
+    // causes 418 bans when fired in parallel.  A 500ms gap between symbols
+    // further avoids burst-detection heuristics.
     std::stop_token startStoken = resyncThread.get_stop_token();
-    std::vector<std::future<bool>> futures;
-    futures.reserve(symbols.size());
+    bool allOk = true;
     for (size_t i = 0; i < symbols.size(); ++i) {
+        if (startStoken.stop_requested()) {
+            allOk = false;
+            break;
+        }
         if (i > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
         const std::string& canonical = symbols[i];
-        // Convert canonical → Binance-specific for the REST snapshot URL.
         std::string binanceSym =
             normalizer_.fromCanonical("binance", canonical).value_or(canonical);
-        futures.push_back(std::async(
-            std::launch::async, [this, canonical, binanceSym, maxSnapshotRetries, startStoken]() {
-                for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
-                    printf("[%s] fetching snapshot (attempt %d/%d)\n", canonical.c_str(), attempt,
-                           maxSnapshotRetries);
-                    if (fetchAndApplySnapshot(binanceSym, canonical, *books->at(canonical),
-                                              startStoken)) {
-                        return true;
-                    }
-                    if (startStoken.stop_requested() || attempt == maxSnapshotRetries) {
-                        break;
-                    }
-                    int delayMs = 1000 * attempt;
-                    printf("[%s] snapshot fetch failed, retrying in %dms\n", canonical.c_str(),
-                           delayMs);
-                    std::unique_lock<std::mutex> lock(resyncMutex);
-                    resyncCv.wait_for(lock, startStoken, std::chrono::milliseconds(delayMs),
-                                      [] { return false; });
-                }
-                fprintf(stderr, "[%s] snapshot fetch gave up after %d attempts\n",
-                        canonical.c_str(), maxSnapshotRetries);
-                return false;
-            }));
-    }
-
-    bool allOk = true;
-    for (auto& f : futures) {
-        if (!f.get()) {
+        bool ok = false;
+        for (int attempt = 1; attempt <= maxSnapshotRetries; ++attempt) {
+            printf("[%s] fetching snapshot (attempt %d/%d)\n", canonical.c_str(), attempt,
+                   maxSnapshotRetries);
+            if (fetchAndApplySnapshot(binanceSym, canonical, *books->at(canonical),
+                                      startStoken)) {
+                ok = true;
+                break;
+            }
+            if (startStoken.stop_requested() || attempt == maxSnapshotRetries) {
+                break;
+            }
+            int delayMs = 2000 * attempt;
+            printf("[%s] snapshot fetch failed, retrying in %dms\n", canonical.c_str(),
+                   delayMs);
+            std::unique_lock<std::mutex> lock(resyncMutex);
+            resyncCv.wait_for(lock, startStoken, std::chrono::milliseconds(delayMs),
+                              [] { return false; });
+        }
+        if (!ok) {
+            fprintf(stderr, "[%s] snapshot fetch gave up after %d attempts\n",
+                    canonical.c_str(), maxSnapshotRetries);
             allOk = false;
         }
     }
