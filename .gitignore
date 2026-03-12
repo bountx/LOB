@@ -1,4 +1,5 @@
 # Build directories
+build-test/
 build/
 out/
 bin/
