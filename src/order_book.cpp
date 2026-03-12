@@ -128,17 +128,16 @@ void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, 
                                  std::vector<LevelDelta>& out) {
     auto& ladder = isBid ? bidLadder : askLadder;
 
-    // Skip levels outside the current ladder window.  The snapshot establishes
-    // the ladder centre around mid-price; incremental levels far from mid are
-    // irrelevant for OFI tracking and would trigger an expensive recenter that
-    // silently drops in-window levels and corrupts the OFI view.
-    if (ladder.activeCount() > 0 && !ladder.inRange(price)) {
-        return;
-    }
-
     const long long prevQty = ladder.get(price);
 
-    ladder.set(price, newQty);
+    const bool recentered = ladder.set(price, newQty);
+
+    // After a recenter the OFI view contains stale prices that may have fallen
+    // outside the new window.  Rebuild the whole view from the ladder so the
+    // incremental updateOfiView logic below works on consistent state.
+    if (recentered) {
+        rebuildOfiSide(isBid);
+    }
 
     const long long delta = newQty - prevQty;
     if (delta == 0) {

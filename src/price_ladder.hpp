@@ -23,7 +23,8 @@ public:
 
     // Set (or remove if qty == 0) a price level.
     // Triggers re-centering if price falls outside the current window.
-    void set(long long price, long long qty);
+    // Returns true if the window was recentered (caller may need to rebuild views).
+    bool set(long long price, long long qty);
 
     // Returns qty for price; 0 if absent or out of current window.
     long long get(long long price) const;

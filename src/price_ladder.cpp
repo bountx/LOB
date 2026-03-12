@@ -87,12 +87,14 @@ void PriceLadder::recenter(long long price) {
     rebuildBestIndices();
 }
 
-void PriceLadder::set(long long price, long long qty) {
+bool PriceLadder::set(long long price, long long qty) {
     assert(qty >= 0 && "qty must be non-negative");
+    bool recentered = false;
     if (!initialized) {
         initCenter(price);
     } else if (!inRange(price)) {
         recenter(price);
+        recentered = true;
     }
 
     const int idx = toIdx(price);
@@ -125,6 +127,7 @@ void PriceLadder::set(long long price, long long qty) {
         }
         if (bestLowIdx >= size) { bestLowIdx = -1; }
     }
+    return recentered;
 }
 
 long long PriceLadder::get(long long price) const {
