@@ -310,11 +310,14 @@ int main(int argc, char* argv[]) {
                                         const std::vector<LevelDelta>& deltas, long long ts) {
                 // Compute OFI delta first so it can be embedded in the broadcast message.
                 // Include Genuine + Maintenance deltas within the OFI view; exclude Backfill.
+                // Use saturating arithmetic throughout: deltaQty is 1e8-scaled and negating
+                // LLONG_MIN is UB; checkedAdd/checkedSubtract clamp instead of wrapping.
                 long long ofi = 0;
                 bool hasOfiDelta = false;
                 for (const auto& d : deltas) {
                     if (d.kind != EventKind::Backfill && (d.wasInView || d.inOfiView)) {
-                        ofi += d.isBid ? d.deltaQty : -d.deltaQty;
+                        ofi = d.isBid ? checkedAdd(ofi, d.deltaQty)
+                                      : checkedSubtract(ofi, d.deltaQty);
                         hasOfiDelta = true;
                     }
                 }

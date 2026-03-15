@@ -263,30 +263,46 @@ private:
             const auto& [exchange, symbol] = *parsed;
             const std::string key = exchange + "." + symbol;
 
+            // Snapshot capture and seq read must be atomic with adding the client to clients_.
+            // If the client enters clients_ before seqMap_ is read, a concurrent broadcastUpdate
+            // can deliver seq=N+1 to the client before the snapshot message carrying seq=N,
+            // leaving the subscriber unable to determine which updates post-date the snapshot.
+            //
+            // getSnapshot() acquires only the OrderBook's own internal lock. It is safe to call
+            // while holding mu_ because no execution path holds an OrderBook lock while acquiring
+            // mu_ (adapters release the OrderBook lock before invoking the update callback, which
+            // is the only place mu_ is acquired on the hot path via broadcastUpdate).
+            bool sendSnap = false;
+            std::vector<std::pair<long long, long long>> snapBids, snapAsks;
+            long long snapTs = 0;
+            uint64_t snapSeq = 0;
             {
                 std::lock_guard lock(mu_);
+                auto it = books_.find(key);
+                if (it != books_.end()) {
+                    auto snap = it->second->getSnapshot();
+                    if (snap.applied) {
+                        snapTs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::system_clock::now().time_since_epoch())
+                                     .count();
+                        auto sit = seqMap_.find(key);
+                        if (sit != seqMap_.end()) snapSeq = sit->second;
+                        snapBids = std::move(snap.bids);
+                        snapAsks = std::move(snap.asks);
+                        sendSnap = true;
+                    }
+                }
+                // Client becomes visible to broadcastUpdate only after snapshot+seq are fixed.
                 clients_[id].streams.insert(key);
             }
 
-            auto it = books_.find(exchange + "." + symbol);
-            if (it != books_.end()) {
-                auto snap = it->second->getSnapshot();
-                if (snap.applied) {
-                    const long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             std::chrono::system_clock::now().time_since_epoch())
-                                             .count();
-                    // Read current seq so subscriber knows which updates to apply after snapshot.
-                    uint64_t snapSeq = 0;
-                    {
-                        std::lock_guard lock(mu_);
-                        auto sit = seqMap_.find(key);
-                        if (sit != seqMap_.end()) snapSeq = sit->second;
-                    }
-                    auto snap_bids = subscriber::bookLevelsToJson(snap.bids);
-                    auto snap_asks = subscriber::bookLevelsToJson(snap.asks);
-                    ws->send(subscriber::buildSnapshot(exchange, symbol, ts, snap_bids, snap_asks,
-                                                       ofiDepth_, snapSeq));
-                }
+            // Send outside the lock — any broadcasts that arrive after the lock is released
+            // will carry seq > snapSeq; subscribers apply them after processing the snapshot.
+            if (sendSnap) {
+                auto snap_bids = subscriber::bookLevelsToJson(snapBids);
+                auto snap_asks = subscriber::bookLevelsToJson(snapAsks);
+                ws->send(subscriber::buildSnapshot(exchange, symbol, snapTs, snap_bids, snap_asks,
+                                                   ofiDepth_, snapSeq));
             }
         }
     }
