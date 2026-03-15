@@ -33,8 +33,8 @@ public:
                */
 
     explicit SubscriberServer(const std::unordered_map<std::string, OrderBook*>& books,
-                              int port = 8765)
-        : books_(books), port_(port), server_(port, "0.0.0.0") {}
+                              int port = 8765, int ofiDepth = 10)
+        : books_(books), port_(port), ofiDepth_(ofiDepth), server_(port, "0.0.0.0") {}
 
     /**
      * @brief Stops the server and releases associated resources when the instance is destroyed.
@@ -146,21 +146,11 @@ public:
     }
 
     // Fan out an incremental update to all clients subscribed to exchange.SYMBOL.
-    /**
-     * @brief Sends an incremental order-book update to all clients subscribed to the given
-     * exchange.symbol stream.
-     *
-     * Reconstructs bids/asks JSON arrays from the level deltas and sends the preformatted update
-     * message to every connected client subscribed to that stream; may close a client's WebSocket
-     * if its send buffer exceeds the backpressure limit.
-     *
-     * @param exchange Exchange identifier (e.g., "binance").
-     * @param symbol Trading symbol (e.g., "BTCUSDT").
-     * @param deltas List of price-level changes from this update (newQty=0 means level removed).
-     * @param timestamp Millisecond-resolution timestamp associated with the update.
-     */
+    // ofiDelta: LOB-computed OFI change for this batch (native units). Computed in main.cpp
+    //           from Genuine+Maintenance deltas within the OFI view; excludes Backfill.
     void broadcastUpdate(std::string_view exchange, std::string_view symbol,
-                         const std::vector<LevelDelta>& deltas, long long timestamp) {
+                         const std::vector<LevelDelta>& deltas, long long timestamp,
+                         double ofiDelta) {
         // Reconstruct bids/asks JSON arrays from Genuine level deltas only.
         // Backfill and synthetic OFI-maintenance entries must not be sent to subscribers.
         nlohmann::json bids = nlohmann::json::array();
@@ -172,7 +162,16 @@ public:
         }
         if (bids.empty() && asks.empty()) return;
         const std::string streamKey = std::string(exchange) + "." + std::string(symbol);
-        const std::string msg = subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks);
+
+        // Increment the per-stream sequence counter under the same lock used to read clients.
+        uint64_t seq = 0;
+        {
+            std::lock_guard lock(mu_);
+            seq = ++seqMap_[streamKey];
+        }
+
+        const std::string msg =
+            subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks, ofiDelta, seq);
 
         // Collect target sockets with their IDs under the lock, then do I/O outside it.
         std::vector<std::pair<std::string, std::shared_ptr<ix::WebSocket>>> targets;
@@ -276,9 +275,17 @@ private:
                     const long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(
                                              std::chrono::system_clock::now().time_since_epoch())
                                              .count();
+                    // Read current seq so subscriber knows which updates to apply after snapshot.
+                    uint64_t snapSeq = 0;
+                    {
+                        std::lock_guard lock(mu_);
+                        auto sit = seqMap_.find(key);
+                        if (sit != seqMap_.end()) snapSeq = sit->second;
+                    }
                     auto snap_bids = subscriber::bookLevelsToJson(snap.bids);
                     auto snap_asks = subscriber::bookLevelsToJson(snap.asks);
-                    ws->send(subscriber::buildSnapshot(exchange, symbol, ts, snap_bids, snap_asks));
+                    ws->send(subscriber::buildSnapshot(exchange, symbol, ts, snap_bids, snap_asks,
+                                                       ofiDepth_, snapSeq));
                 }
             }
         }
@@ -307,8 +314,10 @@ private:
 
     const std::unordered_map<std::string, OrderBook*>& books_;
     int port_;
+    int ofiDepth_;
     mutable std::mutex mu_;
     std::unordered_map<std::string, ClientState> clients_;
+    std::unordered_map<std::string, uint64_t> seqMap_;  // per-stream monotonic update counter
     ix::WebSocketServer server_;
     bool started_ = false;
     std::atomic<long long> messagesSent_{0};

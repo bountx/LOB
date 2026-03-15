@@ -153,52 +153,40 @@ inline nlohmann::json bookLevelsToJson(const std::vector<std::pair<long long, lo
 }
 
 // Build a full order book snapshot message.
-/**
- * @brief Builds a JSON-formatted full order book snapshot message.
- *
- * @param exchange Exchange identifier.
- * @param symbol Trading symbol.
- * @param timestamp Snapshot timestamp.
- * @param bids JSON array of bid entries, each entry formatted as ["price","qty"] strings.
- * @param asks JSON array of ask entries, each entry formatted as ["price","qty"] strings.
- * @return std::string Serialized JSON object containing the fields: `type` ("snapshot"),
- * `exchange`, `symbol`, `ts`, `bids`, and `asks`.
- */
+// seq: the last update sequence number reflected in this snapshot (0 if no updates yet).
+//      Subscribers should apply only updates with seq > this value after receiving the snapshot.
+// ofi_depth: number of top price levels per side used for OFI computation in the LOB.
+//            Subscribers need this to validate their independent OFI reconstruction.
 inline std::string buildSnapshot(std::string_view exchange, std::string_view symbol,
                                  long long timestamp, const nlohmann::json& bids,
-                                 const nlohmann::json& asks) {
+                                 const nlohmann::json& asks, int ofi_depth, uint64_t seq) {
     nlohmann::json j;
     j["type"] = "snapshot";
     j["exchange"] = exchange;
     j["symbol"] = symbol;
     j["ts"] = timestamp;
+    j["seq"] = seq;
+    j["ofi_depth"] = ofi_depth;
     j["bids"] = bids;
     j["asks"] = asks;
     return j.dump();
 }
 
 // Build an incremental update message.
-/**
- * @brief Builds an incremental order book update message as a JSON string.
- *
- * @param exchange Exchange identifier.
- * @param symbol Trading symbol.
- * @param timestamp Unix timestamp for the update (milliseconds).
- * @param bids JSON array of changed bid levels; each entry is expected in the same format produced
- * by bookLevelsToJson. A level with quantity "0" indicates removal.
- * @param asks JSON array of changed ask levels; each entry is expected in the same format produced
- * by bookLevelsToJson. A level with quantity "0" indicates removal.
- * @return std::string JSON-encoded update message with fields: `type` = "update", `exchange`,
- * `symbol`, `ts`, `bids`, and `asks`.
- */
+// ofi_delta: LOB-computed OFI change for this batch (native units, e.g. BTC).
+//            Includes Genuine + Maintenance deltas within the OFI view; excludes Backfill.
+//            Subscribers can accumulate this to cross-check against lob_ofi_value in Prometheus.
+// seq: monotonically increasing per-stream counter; gaps indicate dropped messages.
 inline std::string buildUpdate(std::string_view exchange, std::string_view symbol,
                                long long timestamp, const nlohmann::json& bids,
-                               const nlohmann::json& asks) {
+                               const nlohmann::json& asks, double ofi_delta, uint64_t seq) {
     nlohmann::json j;
     j["type"] = "update";
     j["exchange"] = exchange;
     j["symbol"] = symbol;
     j["ts"] = timestamp;
+    j["seq"] = seq;
+    j["ofi_delta"] = ofi_delta;
     j["bids"] = bids;
     j["asks"] = asks;
     return j.dump();
