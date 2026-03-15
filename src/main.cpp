@@ -292,7 +292,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ─── Start servers ────────────────────────────────────────────────────────
-    SubscriberServer subServer(booksPtrs);
+    SubscriberServer subServer(booksPtrs, 8765, ofiDepth);
     MetricsServer metricsServer(std::move(metricsViews), 9090,
                                 [&subServer]() { return subServer.getStats(); });
 
@@ -308,24 +308,27 @@ int main(int argc, char* argv[]) {
         rt.adapter->setUpdateCallback(
             [&subServer, metricsMapPtr](std::string_view exch, std::string_view symbol,
                                         const std::vector<LevelDelta>& deltas, long long ts) {
-                subServer.broadcastUpdate(exch, symbol, deltas, ts);
-
-                // Compute OFI for this update: sum bid deltas minus ask deltas
-                // for Genuine/Maintenance events that fall within the OFI view.
-                // Only persist the result when the batch contains at least one
-                // OFI-bearing delta — updates that only touch out-of-window levels
-                // produce ofi=0 which must not overwrite the last meaningful reading.
+                // Compute OFI delta first so it can be embedded in the broadcast message.
+                // Include Genuine + Maintenance deltas within the OFI view; exclude Backfill.
+                // Use saturating arithmetic throughout: deltaQty is 1e8-scaled and negating
+                // LLONG_MIN is UB; checkedAdd/checkedSubtract clamp instead of wrapping.
                 long long ofi = 0;
-                bool hasGenuineOfi = false;
+                bool hasOfiDelta = false;
                 for (const auto& d : deltas) {
-                    // Include both exchange-originated (Genuine) and secondary view-change
-                    // (Maintenance) deltas. Exclude Backfill (replay) deltas.
                     if (d.kind != EventKind::Backfill && (d.wasInView || d.inOfiView)) {
-                        ofi += d.isBid ? d.deltaQty : -d.deltaQty;
-                        hasGenuineOfi = true;
+                        ofi = d.isBid ? checkedAdd(ofi, d.deltaQty)
+                                      : checkedSubtract(ofi, d.deltaQty);
+                        hasOfiDelta = true;
                     }
                 }
-                if (hasGenuineOfi) {
+
+                // Broadcast update with the pre-computed OFI delta (native units, e.g. BTC).
+                // Subscribers can accumulate ofi_delta to cross-check lob_ofi_value in Prometheus.
+                subServer.broadcastUpdate(exch, symbol, deltas, ts,
+                                          static_cast<double>(ofi) / 1e8);
+
+                // Persist OFI into metrics accumulator for Prometheus.
+                if (hasOfiDelta) {
                     auto it = metricsMapPtr->find(std::string(symbol));
                     if (it != metricsMapPtr->end()) {
                         auto& acc = it->second->ofiAccumulator;
