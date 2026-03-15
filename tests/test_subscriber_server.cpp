@@ -199,13 +199,15 @@ TEST(BuildSnapshot, CorrectStructure) {
     nlohmann::json asks = nlohmann::json::array();
     asks.push_back({"50001", "1"});
 
-    auto raw = subscriber::buildSnapshot("binance", "BTCUSDT", 1712000000000LL, bids, asks);
+    auto raw = subscriber::buildSnapshot("binance", "BTCUSDT", 1712000000000LL, bids, asks, 10, 42u);
     auto j = nlohmann::json::parse(raw);
 
     EXPECT_EQ(j["type"], "snapshot");
     EXPECT_EQ(j["exchange"], "binance");
     EXPECT_EQ(j["symbol"], "BTCUSDT");
     EXPECT_EQ(j["ts"], 1712000000000LL);
+    EXPECT_EQ(j["seq"], 42u);
+    EXPECT_EQ(j["ofi_depth"], 10);
     EXPECT_EQ(j["bids"].size(), 1u);
     EXPECT_EQ(j["asks"].size(), 1u);
     EXPECT_EQ(j["bids"][0][0], "49999");
@@ -220,13 +222,15 @@ TEST(BuildUpdate, CorrectStructure) {
     nlohmann::json asks = nlohmann::json::array();
     asks.push_back({"94502.00", "1.800"});
 
-    auto raw = subscriber::buildUpdate("binance", "BTCUSDT", 1712000000123LL, bids, asks);
+    auto raw = subscriber::buildUpdate("binance", "BTCUSDT", 1712000000123LL, bids, asks, -1.23456789, 7u);
     auto j = nlohmann::json::parse(raw);
 
     EXPECT_EQ(j["type"], "update");
     EXPECT_EQ(j["exchange"], "binance");
     EXPECT_EQ(j["symbol"], "BTCUSDT");
     EXPECT_EQ(j["ts"], 1712000000123LL);
+    EXPECT_EQ(j["seq"], 7u);
+    EXPECT_DOUBLE_EQ(j["ofi_delta"].get<double>(), -1.23456789);
     EXPECT_EQ(j["bids"][0][0], "94500.00");
     EXPECT_EQ(j["asks"][0][0], "94502.00");
 }
