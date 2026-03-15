@@ -23,7 +23,8 @@ public:
 
     // Set (or remove if qty == 0) a price level.
     // Triggers re-centering if price falls outside the current window.
-    void set(long long price, long long qty);
+    // Returns true if the window was recentered (caller may need to rebuild views).
+    bool set(long long price, long long qty);
 
     // Returns qty for price; 0 if absent or out of current window.
     long long get(long long price) const;
@@ -47,6 +48,12 @@ public:
 
     // Returns true if price is within the current window (false when uninitialised).
     bool inRange(long long price) const noexcept;
+
+    // Returns the lowest price representable in the current window (0 if uninitialised).
+    long long windowLow() const noexcept;
+
+    // Returns the highest price representable in the current window (0 if uninitialised).
+    long long windowHigh() const noexcept;
 
     // Visit every active level in ascending price order.  fn(price, qty).
     template <typename Fn>

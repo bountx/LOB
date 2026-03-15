@@ -40,6 +40,9 @@ if(NOT BUILD_TESTS_ONLY)
         httplib::httplib
         simdjson::simdjson
     )
+
+    # Export symbols for backtrace_symbols() on crash.
+    target_link_options(lob_app PRIVATE -rdynamic)
 endif()
 
 if(BUILD_TESTS)

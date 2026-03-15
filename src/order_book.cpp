@@ -127,9 +127,30 @@ std::vector<LevelDelta> OrderBook::applyDelta(const nlohmann::json& bidsArr,
 void OrderBook::applyLevelChange(long long price, long long newQty, bool isBid, EventKind kind,
                                  std::vector<LevelDelta>& out) {
     auto& ladder = isBid ? bidLadder : askLadder;
+
     const long long prevQty = ladder.get(price);
 
-    ladder.set(price, newQty);
+    // Directional recenter guard for out-of-range prices:
+    //   Bids: only recenter when price is ABOVE the window (market moved up).
+    //         Prices below the window are deep-book levels — drop them.
+    //   Asks: only recenter when price is BELOW the window (market moved down).
+    //         Prices above the window are deep-book levels — drop them.
+    if (ladder.activeCount() > 0 && !ladder.inRange(price)) {
+        const bool isDeep = isBid ? (price < ladder.windowLow())
+                                  : (price > ladder.windowHigh());
+        if (isDeep) {
+            return;  // deep-book level — silently drop
+        }
+    }
+
+    const bool recentered = ladder.set(price, newQty);
+
+    // After a recenter the OFI view contains stale prices that may have fallen
+    // outside the new window.  Rebuild the whole view from the ladder so the
+    // incremental updateOfiView logic below works on consistent state.
+    if (recentered) {
+        rebuildOfiSide(isBid);
+    }
 
     const long long delta = newQty - prevQty;
     if (delta == 0) {

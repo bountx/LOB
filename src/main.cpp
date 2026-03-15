@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -10,6 +13,11 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#ifdef __linux__
+#include <execinfo.h>
+#include <unistd.h>
+#endif
 
 #include "binance_adapter.hpp"
 #include "i_exchange_adapter.hpp"
@@ -21,6 +29,20 @@
 #include "order_book.hpp"
 #include "subscriber_server.hpp"
 #include "utils/checked_arith.hpp"
+
+// Crash handler: print a backtrace on SIGSEGV/SIGABRT so Docker logs capture it.
+static void crashHandler(int sig) {
+    fprintf(stderr, "\n=== FATAL: signal %d (%s) ===\n", sig, strsignal(sig));
+#ifdef __linux__
+    void* frames[64];
+    int n = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, n, STDERR_FILENO);
+#endif
+    fflush(stderr);
+    // Re-raise with default handler to get the correct exit code (128 + sig).
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
 
 struct ExchangeRuntime {
     std::string name;
@@ -46,6 +68,13 @@ struct ExchangeRuntime {
  * @return int `0` on normal termination, `-1` on configuration or startup errors.
  */
 int main(int argc, char* argv[]) {
+    // Make stdout line-buffered so Docker captures logs immediately.
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+
+    // Install crash handlers to get backtraces in Docker logs.
+    signal(SIGSEGV, crashHandler);
+    signal(SIGABRT, crashHandler);
+
     const char* configPath = (argc > 1) ? argv[1] : "config.json";
 
     nlohmann::json config;
@@ -329,6 +358,9 @@ int main(int argc, char* argv[]) {
         if (!started) {
             fprintf(stderr, "gave up starting %s adapter after %d attempts\n",
                     runtimes[i].name.c_str(), kMaxStartAttempts);
+            // Stop the failed adapter too — its WebSocket may still be running
+            // with IXWebSocket auto-reconnect, leaking connections and memory.
+            runtimes[i].adapter->stop();
             for (size_t j = 0; j < i; ++j) {
                 runtimes[j].adapter->stop();
             }

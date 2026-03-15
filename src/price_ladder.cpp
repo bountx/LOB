@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -21,6 +23,7 @@ PriceLadder::PriceLadder(long long tickSizeArg, int halfRangeArg) {
 }
 
 int PriceLadder::toIdx(long long price) const noexcept {
+    // Caller must ensure price is inRange() — toIdx does NOT bounds-check.
     return static_cast<int>((price - basePrice) / tickSize);
 }
 
@@ -36,7 +39,16 @@ bool PriceLadder::inRange(long long price) const noexcept {
     if (offset < 0) {
         return false;
     }
-    return static_cast<int>(offset / tickSize) < size;
+    // Compare as long long to avoid int overflow on extreme prices.
+    return (offset / tickSize) < static_cast<long long>(size);
+}
+
+long long PriceLadder::windowLow() const noexcept {
+    return initialized ? basePrice : 0;
+}
+
+long long PriceLadder::windowHigh() const noexcept {
+    return initialized ? basePrice + static_cast<long long>(size - 1) * tickSize : 0;
 }
 
 void PriceLadder::initCenter(long long price) {
@@ -83,15 +95,18 @@ void PriceLadder::recenter(long long price) {
     rebuildBestIndices();
 }
 
-void PriceLadder::set(long long price, long long qty) {
+bool PriceLadder::set(long long price, long long qty) {
     assert(qty >= 0 && "qty must be non-negative");
+    bool recentered = false;
     if (!initialized) {
         initCenter(price);
     } else if (!inRange(price)) {
         recenter(price);
+        recentered = true;
     }
 
     const int idx = toIdx(price);
+    assert(idx >= 0 && idx < size && "PriceLadder::set: index out of bounds after inRange check");
     const long long old = qtys[idx];
     qtys[idx] = qty;
 
@@ -120,6 +135,7 @@ void PriceLadder::set(long long price, long long qty) {
         }
         if (bestLowIdx >= size) { bestLowIdx = -1; }
     }
+    return recentered;
 }
 
 long long PriceLadder::get(long long price) const {
@@ -161,8 +177,8 @@ long long PriceLadder::prevBelow(long long below) const {
     if (offset <= 0) {
         return 0;
     }
-    int startIdx = static_cast<int>((offset - 1) / tickSize);
-    startIdx = std::min(startIdx, size - 1);
+    const long long rawIdx = (offset - 1) / tickSize;
+    int startIdx = (rawIdx >= static_cast<long long>(size)) ? size - 1 : static_cast<int>(rawIdx);
     for (int i = startIdx; i >= 0; --i) {
         if (qtys[i] > 0) {
             return toPrice(i);
@@ -180,10 +196,9 @@ long long PriceLadder::nextAbove(long long above) const {
     if (offset < 0) {
         startIdx = 0;
     } else {
-        startIdx = static_cast<int>(offset / tickSize) + 1;
-    }
-    if (startIdx >= size) {
-        return 0;
+        const long long rawIdx = offset / tickSize + 1;
+        if (rawIdx >= static_cast<long long>(size)) return 0;
+        startIdx = static_cast<int>(rawIdx);
     }
     for (int i = startIdx; i < size; ++i) {
         if (qtys[i] > 0) {

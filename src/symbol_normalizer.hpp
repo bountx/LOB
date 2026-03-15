@@ -16,8 +16,9 @@
 //
 //   Kraken:
 //     toCanonical:   replace '/' → '-'               "BTC/USDT" → "BTC-USDT"
-//                    XBT-* → BTC-*                   "XBT/USDT" → "BTC-USDT"
+//                    XBT-* → BTC-*  (legacy tickers) "XBT/USDT" → "BTC-USDT"
 //     fromCanonical: replace '-' → '/'               "BTC-USDT" → "BTC/USDT"
+//                    (Kraken v2 WebSocket uses modern names: BTC, DOGE, not XBT/XDG)
 //
 // Explicit entries added via add() always override auto-conversion.
 class SymbolNormalizer {
@@ -97,12 +98,6 @@ inline std::optional<std::string> SymbolNormalizer::fromCanonical(
         std::string result(canonical);
         for (char& c : result) {
             if (c == '-') c = '/';
-        }
-        // Map canonical base currencies back to Kraken legacy tickers.
-        if (result.starts_with("BTC/")) {
-            result.replace(0, 3, "XBT");
-        } else if (result.starts_with("DOGE/")) {
-            result.replace(0, 4, "XDG");
         }
         return result;
     }
