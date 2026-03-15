@@ -99,12 +99,6 @@ inline std::optional<std::string> SymbolNormalizer::fromCanonical(
         for (char& c : result) {
             if (c == '-') c = '/';
         }
-        // Map canonical base currencies back to Kraken legacy tickers.
-        if (result.starts_with("BTC/")) {
-            result.replace(0, 3, "XBT");
-        } else if (result.starts_with("DOGE/")) {
-            result.replace(0, 4, "XDG");
-        }
         return result;
     }
 
