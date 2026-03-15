@@ -163,26 +163,25 @@ public:
         if (bids.empty() && asks.empty()) return;
         const std::string streamKey = std::string(exchange) + "." + std::string(symbol);
 
-        // Increment the per-stream sequence counter under the same lock used to read clients.
+        // Increment seq and collect targets in one lock to prevent a subscriber from receiving
+        // a snapshot and an update with the same seq. If these were separate locks, handleSubscribe
+        // could run between them: it would read seqMap_[streamKey]=N (after the increment) for
+        // snapSeq, add the client to clients_, and then the second lock would collect that client
+        // and send it update(seq=N) — identical to the snapshot's seq=N.
         uint64_t seq = 0;
-        {
-            std::lock_guard lock(mu_);
-            seq = ++seqMap_[streamKey];
-        }
-
-        const std::string msg =
-            subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks, ofiDelta, seq);
-
-        // Collect target sockets with their IDs under the lock, then do I/O outside it.
         std::vector<std::pair<std::string, std::shared_ptr<ix::WebSocket>>> targets;
         {
             std::lock_guard lock(mu_);
+            seq = ++seqMap_[streamKey];
             for (auto& [id, client] : clients_) {
                 if (!client.streams.count(streamKey)) continue;
                 auto ws = client.ws.lock();
                 if (ws) targets.emplace_back(id, std::move(ws));
             }
         }
+
+        const std::string msg =
+            subscriber::buildUpdate(exchange, symbol, timestamp, bids, asks, ofiDelta, seq);
         std::vector<std::string> backpressureIds;
         for (auto& [id, ws] : targets) {
             if (ws->bufferedAmount() > kBackpressureLimit) {
