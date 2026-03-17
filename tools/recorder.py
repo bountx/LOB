@@ -59,7 +59,7 @@ def main() -> None:
         count = loop.run_until_complete(task)
         print(f"Stopped: recorded {count} messages → {output}")
     except asyncio.CancelledError:
-        print(f"\nStopped")
+        print("\nStopped")
     finally:
         loop.close()
 
